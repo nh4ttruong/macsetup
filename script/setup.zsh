@@ -18,7 +18,6 @@ append_once() {
     printf '\n%s\n' "$content" >> "$file_path"
   fi
 }
-
 ensure_brew_shellenv() {
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -97,8 +96,11 @@ append_once \
   'if command -v brew &>/dev/null; then
   FPATH="$(brew --prefix)/share/zsh-completions:$FPATH"
   autoload -Uz compinit
-  compinit
+  compinit -u
 fi'
+
+## Fix permissions for zsh completions
+compaudit | xargs chmod g-w,o-w
 
 ## Install nvm
 install_formula "nvm"
