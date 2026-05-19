@@ -1,6 +1,6 @@
 # Mac Setup
 
-Small setup script for a new macOS machine.
+Help you guys setup for a new macOS machine.
 
 ## What It Does
 
