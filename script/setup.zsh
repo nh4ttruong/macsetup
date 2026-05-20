@@ -158,6 +158,7 @@ CASK_APPS=(
   "microsoft-edge"
   "telegram"
   "xkey"
+  "termius"
 )
 
 for app in "${CASK_APPS[@]}"; do
