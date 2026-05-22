@@ -1,6 +1,6 @@
 #!/bin/zsh
 #
-# macOS setup script — installs Homebrew, CLI tools, apps, fonts, and git profiles.
+# macOS setup script - installs Homebrew, CLI tools, apps, fonts, and git profiles.
 #
 # Usage:
 #   ./setup                     Interactive menu (multi-select)
@@ -34,7 +34,6 @@ CLI_PACKAGES=(
   yq
   nano
   nanorc
-  net-tools
   pnpm
   telnet
 )
@@ -64,10 +63,10 @@ typeset -A GROUP_DESC=(
   brew  "Homebrew (install or update)"
   zsh   "zsh-completions and shell config"
   node  "nvm and Node.js ${NODE_VERSION}"
-  cli   "Common CLI tools (${#CLI_PACKAGES[@]} packages, nano syntax highlight included)"
+  cli   "Common CLI tools (${#CLI_PACKAGES[@]} packages)"
   apps  "GUI apps (${#CASK_APPS[@]} casks)"
   fonts "Developer fonts (${#FONTS[@]} casks)"
-  git   "Git identity (renamable, default: personal + work)"
+  git   "Fast git installed and switcher profiles"
 )
 
 # ---------- helpers ----------
@@ -107,9 +106,15 @@ ensure_brew_shellenv() {
 brew_has()      { brew list --formula "$1" &>/dev/null; }
 brew_cask_has() { brew list --cask "$1" &>/dev/null; }
 
+# Get the version of an installed formula or cask. Args: <name> <--formula|--cask>
+brew_version() {
+  brew list --versions "$2" "$1" 2>/dev/null | awk 'NR==1 {$1=""; sub(/^ /, ""); print}'
+}
+
 install_formula() {
   if brew_has "$1"; then
-    log "$1 already installed"
+    local ver="$(brew_version "$1" --formula)"
+    success "$1 already installed (v${ver:-unknown})"
   else
     log "Installing $1"
     brew install "$1"
@@ -118,7 +123,8 @@ install_formula() {
 
 install_cask() {
   if brew_cask_has "$1"; then
-    log "$1 already installed"
+    local ver="$(brew_version "$1" --cask)"
+    success "$1 already installed (v${ver:-unknown})"
   else
     log "Installing $1"
     brew install --cask "$1"
@@ -127,6 +133,34 @@ install_cask() {
 
 require_brew() {
   command -v brew &>/dev/null || fail "Homebrew is required. Run: ./setup brew"
+}
+
+# Ensure a command exists; prompt to install via brew if missing.
+# Returns 1 if the user declined; 0 if available or installed.
+# Usage: ensure_command <cmd> [<brew-formula>]
+ensure_command() {
+  local cmd="$1" pkg="${2:-$1}"
+  command -v "$cmd" &>/dev/null && return 0
+
+  require_brew
+  if $ONE_CLICK; then
+    install_formula "$pkg"
+    return 0
+  fi
+
+  warn "$cmd is not installed but is required for this option."
+  ask "Install $pkg now? [Y/n]:"
+  local answer
+  read -r answer
+  case "$answer" in
+    n|N|no|No|NO)
+      warn "Skipped - $cmd is still required to use this option."
+      return 1
+      ;;
+    *)
+      install_formula "$pkg"
+      ;;
+  esac
 }
 
 # Prompt the user to pick items from an array. Populates SELECTED_ITEMS.
@@ -232,11 +266,22 @@ group_node() {
 [ -s "$(brew --prefix nvm)/nvm.sh" ] && . "$(brew --prefix nvm)/nvm.sh"
 [ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && . "$(brew --prefix nvm)/etc/bash_completion.d/nvm"'
   [[ -s "$(brew --prefix nvm)/nvm.sh" ]] && . "$(brew --prefix nvm)/nvm.sh"
-  if ! nvm ls "$NODE_VERSION" &>/dev/null; then
-    log "Installing Node.js $NODE_VERSION"
-    nvm install "$NODE_VERSION"
+
+  local node_ver="$NODE_VERSION"
+  if ! $ONE_CLICK; then
+    ask "Node version to install [$NODE_VERSION]:"
+    local answer
+    read -r answer
+    [[ -n "$answer" ]] && node_ver="$answer"
   fi
-  nvm alias default "$NODE_VERSION"
+
+  if ! nvm ls "$node_ver" &>/dev/null; then
+    log "Installing Node.js $node_ver"
+    nvm install "$node_ver"
+  else
+    log "Node.js $node_ver already installed"
+  fi
+  nvm alias default "$node_ver"
 }
 
 group_cli() {
@@ -276,7 +321,7 @@ group_fonts() {
 
 GITSWITCH_BIN="/usr/local/bin/gitswitch"
 GITSWITCH_CONF="$HOME/.gitswitch.conf"
-GITSWITCH_REMOTE_URL="https://raw.githubusercontent.com/nh4ttruong/macsetup/main/gitswitch"
+GITSWITCH_REMOTE_URL="https://raw.githubusercontent.com/nh4ttruong/macsetup/main/bin/gitswitch"
 
 # Prompt for a single git profile. Sets PROFILE_NAME and PROFILE_EMAIL globals.
 # Returns 1 if the user skipped (empty name).
@@ -301,13 +346,13 @@ prompt_git_profile() {
   printf "%s" "$email_prompt"
   read -r PROFILE_EMAIL
   [[ -z "$PROFILE_EMAIL" ]] && PROFILE_EMAIL="$default_email"
-  [[ -z "$PROFILE_EMAIL" ]] && { warn "Email is required — skipped $label"; return 1; }
+  [[ -z "$PROFILE_EMAIL" ]] && { warn "Email is required - skipped $label"; return 1; }
   return 0
 }
 
-# Locate the bundled gitswitch script next to this setup; fall back to GitHub raw.
+# Locate the bundled gitswitch script in bin/ next to this setup; fall back to GitHub raw.
 locate_gitswitch_source() {
-  local local_path="${SCRIPT_PATH:h}/gitswitch"
+  local local_path="${SCRIPT_PATH:h}/bin/gitswitch"
   if [[ -f "$local_path" ]]; then
     GITSWITCH_SRC="$local_path"
     GITSWITCH_SRC_KIND=local
@@ -339,12 +384,12 @@ install_gitswitch_bin() {
 install_gitswitch() {
   (( ${#GIT_PROFILES[@]} == 0 )) && return
 
-  # Truncate config — rewrite from scratch since profile labels can change.
+  # Truncate config - rewrite from scratch since profile labels can change.
   mkdir -p "$(dirname "$GITSWITCH_CONF")"
   : > "$GITSWITCH_CONF"
 
   {
-    print -r -- "# gitswitch profiles — generated by macsetup ./setup git"
+    print -r -- "# gitswitch profiles - generated by macsetup ./setup git"
     print -nr -- "PROFILES=("
     local first=true
     for p in "${GIT_PROFILES[@]}"; do
@@ -369,7 +414,7 @@ install_gitswitch() {
 }
 
 group_git() {
-  command -v git &>/dev/null || { warn "git not installed — run: ./setup cli"; return; }
+  ensure_command git || return 0
 
   if $ONE_CLICK; then
     warn "Skipping git profile setup (run './setup git' separately to configure)"
@@ -380,6 +425,27 @@ group_git() {
   dim "  Default: 2 profiles named 'personal' and 'work'."
   dim "  You can rename them and add more. Press Enter to accept defaults."
   print
+
+  if [[ -f "$GITSWITCH_CONF" ]]; then
+    warn "Existing profile config found at $GITSWITCH_CONF:"
+    (
+      source "$GITSWITCH_CONF"
+      local p n e
+      for p in "${PROFILES[@]}"; do
+        n="PROFILE_${p}_NAME"
+        e="PROFILE_${p}_EMAIL"
+        print "    $p: ${(P)n} <${(P)e}>"
+      done
+    )
+    warn "Continuing will overwrite this config."
+    ask "Continue? [Y/n]:"
+    local answer
+    read -r answer
+    case "$answer" in
+      n|N|no|No|NO) info "Kept existing profiles. Skipping."; return 0 ;;
+    esac
+    print
+  fi
 
   local cur_name cur_email count
   cur_name="$(git config --global --get user.name 2>/dev/null || true)"
@@ -408,7 +474,7 @@ group_git() {
     read -r label
     label="${label:-$default_label}"
     if [[ ! "$label" =~ '^[a-zA-Z0-9_-]+$' ]]; then
-      warn "Label must contain only letters, digits, '_' or '-' — skipped"
+      warn "Label must contain only letters, digits, '_' or '-' - skipped"
       continue
     fi
 
@@ -449,7 +515,7 @@ print_list() {
 
 print_banner() {
   print
-  print -P "%F{cyan}%B  macsetup%b%f $(dim '— macOS provisioner')"
+  print -P "%F{cyan}%B  macsetup%b%f $(dim '- macOS provisioner')"
   hr
 }
 
@@ -463,7 +529,7 @@ interactive_menu() {
     ((i++))
   done
   print
-  print -P "  %F{green} a%f  all    One-click — install everything, no prompts"
+  print -P "  %F{green} a%f  all    One-click - install everything, no prompts"
   print -P "  %F{red} q%f  quit   Exit without changes"
   print
   dim "  Pick numbers like '1 3 5' to install specific groups."
@@ -497,13 +563,13 @@ interactive_menu() {
 run_group() {
   local name="$1"
   print
-  print -P "%F{cyan}%B┌──[ $name ]%b%f $(dim '──────────────')"
+  print -P "%F{cyan}%B┌──[ $name ]%b%f"
   "group_$name"
-  print -P "%F{cyan}%B└─%b%f"
+  print -P "%F{cyan}%B└──[ $name ]%b%f"
 }
 
 run_selected() {
-  # brew is a prerequisite for every other group — run it first if anything else is selected.
+  # brew is a prerequisite for every other group - run it first if anything else is selected.
   if (( ${SELECTED[(Ie)brew]} == 0 )) && ! command -v brew &>/dev/null; then
     SELECTED=(brew "${SELECTED[@]}")
   fi
@@ -521,17 +587,28 @@ main() {
     -l|--list) print_list; exit 0 ;;
     "")
       INTERACTIVE=true
+      local next
       while true; do
         SELECTED=()
         ONE_CLICK=false
         BACK_REQUESTED=false
         interactive_menu || continue
         run_selected
+        # 'all' (one-click) exits after running everything.
+        $ONE_CLICK && break
         if $BACK_REQUESTED; then
-          info "Returning to menu…"
+          info "Returning to menu..."
           continue
         fi
-        break
+        # Group(s) finished. Ask what to do next.
+        print
+        success "Completed: ${(j:, :)SELECTED}"
+        ask "[m] back to menu  [q] exit:"
+        read -r next
+        case "$next" in
+          q|Q|exit|quit) break ;;
+          *) ;;
+        esac
       done
       ;;
     all)

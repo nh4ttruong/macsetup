@@ -1,6 +1,6 @@
 #!/bin/zsh
 #
-# gitswitch — switch the local git identity in a repo between named profiles.
+# gitswitch - switch the local git identity in a repo between named profiles.
 #
 # Usage:
 #   gitswitch <profile>       Switch the local repo identity
