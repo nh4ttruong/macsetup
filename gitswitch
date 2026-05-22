@@ -1,0 +1,93 @@
+#!/bin/zsh
+#
+# gitswitch — switch the local git identity in a repo between named profiles.
+#
+# Usage:
+#   gitswitch <profile>       Switch the local repo identity
+#   gitswitch list            Show configured profiles
+#   gitswitch -h | --help
+#
+# Profiles are loaded from $GITSWITCH_CONFIG (default: ~/.gitswitch.conf).
+# Generate or update the config with macsetup: ./setup git
+
+set -e
+
+CONFIG="${GITSWITCH_CONFIG:-$HOME/.gitswitch.conf}"
+
+red()    { print -P "%F{red} ✗ %f$*" >&2; }
+cyan()   { print -P "%F{cyan}❯%f $*"; }
+dim()    { print -P "%F{240}$*%f"; }
+
+usage() {
+  cat <<EOF
+Usage:
+  gitswitch <profile>   Switch the local repo identity
+  gitswitch list        Show configured profiles
+  gitswitch -h | --help Show this help
+
+Profiles are loaded from \$GITSWITCH_CONFIG (default: ~/.gitswitch.conf).
+Generate the config with macsetup: ./setup git
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+if [[ ! -f "$CONFIG" ]]; then
+  red "No profile config found at $CONFIG"
+  dim "Generate it by running macsetup: ./setup git"
+  exit 1
+fi
+
+source "$CONFIG"
+
+if (( ${#PROFILES[@]} == 0 )); then
+  red "$CONFIG has no PROFILES configured"
+  exit 1
+fi
+
+list_profiles() {
+  print -P "%BAvailable profiles:%b"
+  local p name_var email_var
+  for p in "${PROFILES[@]}"; do
+    name_var="PROFILE_${p}_NAME"
+    email_var="PROFILE_${p}_EMAIL"
+    print -P "  %F{cyan}$(printf '%-12s' $p)%f ${(P)name_var} <${(P)email_var}>"
+  done
+}
+
+case "${1:-}" in
+  "")
+    usage
+    print
+    list_profiles
+    exit 0
+    ;;
+  list|ls)
+    list_profiles
+    exit 0
+    ;;
+esac
+
+PROFILE="$1"
+if (( ${PROFILES[(Ie)$PROFILE]} == 0 )); then
+  red "Unknown profile: $PROFILE"
+  print
+  list_profiles
+  exit 1
+fi
+
+name_var="PROFILE_${PROFILE}_NAME"
+email_var="PROFILE_${PROFILE}_EMAIL"
+NAME="${(P)name_var}"
+EMAIL="${(P)email_var}"
+
+if [[ -z "$NAME" || -z "$EMAIL" ]]; then
+  red "Profile '$PROFILE' is missing name or email in $CONFIG"
+  exit 1
+fi
+
+git config --local user.name  "$NAME"
+git config --local user.email "$EMAIL"
+cyan "Switched local git identity to %B$PROFILE%b: $NAME <$EMAIL>"

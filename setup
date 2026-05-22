@@ -1,0 +1,557 @@
+#!/bin/zsh
+#
+# macOS setup script — installs Homebrew, CLI tools, apps, fonts, and git profiles.
+#
+# Usage:
+#   ./setup                     Interactive menu (multi-select)
+#   ./setup all                 Install everything
+#   ./setup <group>...          Install one or more groups
+#   ./setup -l | --list         List available groups
+#   ./setup -h | --help         Show this help
+#
+# Groups: brew, zsh, node, cli, apps, fonts, git
+
+set -e
+
+SCRIPT_PATH="${(%):-%x}"
+NODE_VERSION="24"
+ZSHRC_FILE="$HOME/.zshrc"
+NANORC_FILE="$HOME/.nanorc"
+ONE_CLICK=false
+INTERACTIVE=false
+BACK_REQUESTED=false
+SELECTED_ITEMS=()
+
+DEFAULT_PROFILES=(personal work)
+GIT_PROFILES=()
+GIT_PROFILE_NAMES=()
+GIT_PROFILE_EMAILS=()
+
+CLI_PACKAGES=(
+  git
+  make
+  jq
+  yq
+  nano
+  nanorc
+  net-tools
+  pnpm
+  telnet
+)
+
+CASK_APPS=(
+  visual-studio-code
+  iterm2
+  microsoft-edge
+  telegram
+  xkey
+  termius
+  orbstack # Docker alternative with better Apple Silicon support
+)
+
+FONTS=(
+  font-hack-nerd-font
+  font-fira-code
+  font-fira-code-nerd-font
+  font-dejavu
+  font-dejavu-sans-mono-nerd-font
+  font-hack
+  font-source-code-pro
+)
+
+GROUPS=(brew zsh node cli apps fonts git)
+typeset -A GROUP_DESC=(
+  brew  "Homebrew (install or update)"
+  zsh   "zsh-completions and shell config"
+  node  "nvm and Node.js ${NODE_VERSION}"
+  cli   "Common CLI tools (${#CLI_PACKAGES[@]} packages, nano syntax highlight included)"
+  apps  "GUI apps (${#CASK_APPS[@]} casks)"
+  fonts "Developer fonts (${#FONTS[@]} casks)"
+  git   "Git identity (renamable, default: personal + work)"
+)
+
+# ---------- helpers ----------
+
+log()      { print -P "%F{cyan}==>%f $*"; }
+info()     { print -P "%F{blue}-->%f $*"; }
+success()  { print -P "%F{green} ✓ %f$*"; }
+warn()     { print -P "%F{yellow} ! %f$*" >&2; }
+fail()     { print -P "%F{red} ✗ %f$*" >&2; exit 1; }
+dim()      { print -- $'\e[2m'"$*"$'\e[0m'; }
+hr()       { dim "────────────────────────────────────────────"; }
+
+header() {
+  print
+  print -P "%F{cyan}%B▌%b $* %f"
+  hr
+}
+
+ask() {
+  # Print a colored prompt arrow and label; no trailing newline.
+  print -nP "%F{magenta}❯%f %B$1%b "
+}
+
+append_once() {
+  local file="$1" marker="$2" content="$3"
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  grep -qF "$marker" "$file" || printf '\n%s\n' "$content" >> "$file"
+}
+
+ensure_brew_shellenv() {
+  for prefix in /opt/homebrew /usr/local; do
+    [[ -x "$prefix/bin/brew" ]] && { eval "$($prefix/bin/brew shellenv)"; return; }
+  done
+}
+
+brew_has()      { brew list --formula "$1" &>/dev/null; }
+brew_cask_has() { brew list --cask "$1" &>/dev/null; }
+
+install_formula() {
+  if brew_has "$1"; then
+    log "$1 already installed"
+  else
+    log "Installing $1"
+    brew install "$1"
+  fi
+}
+
+install_cask() {
+  if brew_cask_has "$1"; then
+    log "$1 already installed"
+  else
+    log "Installing $1"
+    brew install --cask "$1"
+  fi
+}
+
+require_brew() {
+  command -v brew &>/dev/null || fail "Homebrew is required. Run: ./setup brew"
+}
+
+# Prompt the user to pick items from an array. Populates SELECTED_ITEMS.
+# In ONE_CLICK mode, selects everything without prompting.
+# In INTERACTIVE mode, 'b' returns to the main menu (sets BACK_REQUESTED).
+# Returns 2 if the user requested back; 0 otherwise.
+# Usage: select_items "<label>" "${ITEM_ARRAY[@]}"
+select_items() {
+  local label="$1"
+  shift
+  local -a items=("$@")
+  SELECTED_ITEMS=()
+
+  if $ONE_CLICK; then
+    SELECTED_ITEMS=("${items[@]}")
+    return 0
+  fi
+
+  header "$label"
+  local i=1
+  for it in "${items[@]}"; do
+    print -P "  %F{cyan}$(printf '%2d' $i)%f  $it"
+    ((i++))
+  done
+  print
+  dim "  a = all   n = skip$($INTERACTIVE && print -n '   b = back to menu')   or list like '1 3 5'"
+  ask "Selection [a]:"
+  local choice
+  read -r choice
+  case "$choice" in
+    ""|a|all)
+      SELECTED_ITEMS=("${items[@]}")
+      ;;
+    n|none|skip)
+      SELECTED_ITEMS=()
+      info "Skipped $label"
+      ;;
+    b|back)
+      if $INTERACTIVE; then
+        BACK_REQUESTED=true
+        return 2
+      else
+        SELECTED_ITEMS=()
+        info "Skipped $label"
+      fi
+      ;;
+    *)
+      for token in ${(s: :)choice}; do
+        if [[ "$token" =~ '^[0-9]+$' && "$token" -ge 1 && "$token" -le ${#items[@]} ]]; then
+          SELECTED_ITEMS+=("${items[$token]}")
+        else
+          fail "Invalid selection: $token"
+        fi
+      done
+      ;;
+  esac
+  return 0
+}
+
+# ---------- group installers ----------
+
+ensure_xcode_tools() {
+  if ! xcode-select -p &>/dev/null; then
+    log "Installing Apple command-line tools"
+    xcode-select --install
+    fail "Finish the Apple command-line tools installer, then rerun this script."
+  fi
+}
+
+group_brew() {
+  ensure_xcode_tools
+  if ! command -v brew &>/dev/null; then
+    log "Installing Homebrew"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+  ensure_brew_shellenv
+  command -v brew &>/dev/null || fail "Homebrew installed but not on PATH. Restart your terminal and rerun."
+  log "Updating Homebrew"
+  brew update --force --quiet
+  brew doctor || true
+}
+
+group_zsh() {
+  require_brew
+  install_formula zsh-completions
+  append_once "$ZSHRC_FILE" \
+    'FPATH="$(brew --prefix)/share/zsh-completions:$FPATH"' \
+    'if command -v brew &>/dev/null; then
+  FPATH="$(brew --prefix)/share/zsh-completions:$FPATH"
+  autoload -Uz compinit
+  compinit -u
+fi'
+  compaudit 2>/dev/null | xargs chmod g-w,o-w 2>/dev/null || true
+}
+
+group_node() {
+  require_brew
+  install_formula nvm
+  mkdir -p "$HOME/.nvm"
+  append_once "$ZSHRC_FILE" \
+    'export NVM_DIR="$HOME/.nvm"' \
+    'export NVM_DIR="$HOME/.nvm"
+[ -s "$(brew --prefix nvm)/nvm.sh" ] && . "$(brew --prefix nvm)/nvm.sh"
+[ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && . "$(brew --prefix nvm)/etc/bash_completion.d/nvm"'
+  [[ -s "$(brew --prefix nvm)/nvm.sh" ]] && . "$(brew --prefix nvm)/nvm.sh"
+  if ! nvm ls "$NODE_VERSION" &>/dev/null; then
+    log "Installing Node.js $NODE_VERSION"
+    nvm install "$NODE_VERSION"
+  fi
+  nvm alias default "$NODE_VERSION"
+}
+
+group_cli() {
+  require_brew
+  select_items "CLI packages" "${CLI_PACKAGES[@]}" || return 0
+  for pkg in "${SELECTED_ITEMS[@]}"; do
+    install_formula "$pkg"
+  done
+  enable_nano_highlight
+}
+
+# Auto-enable nano syntax highlighting when nanorc files are present.
+enable_nano_highlight() {
+  command -v brew &>/dev/null || return
+  local share_dir="$(brew --prefix)/share/nanorc"
+  if [[ -d "$share_dir" ]]; then
+    append_once "$NANORC_FILE" "include $share_dir/*.nanorc" "include $share_dir/*.nanorc"
+    info "Enabled nano syntax highlighting"
+  fi
+}
+
+group_apps() {
+  require_brew
+  select_items "GUI apps" "${CASK_APPS[@]}" || return 0
+  for app in "${SELECTED_ITEMS[@]}"; do
+    install_cask "$app"
+  done
+}
+
+group_fonts() {
+  require_brew
+  select_items "Developer fonts" "${FONTS[@]}" || return 0
+  for font in "${SELECTED_ITEMS[@]}"; do
+    install_cask "$font"
+  done
+}
+
+GITSWITCH_BIN="/usr/local/bin/gitswitch"
+GITSWITCH_CONF="$HOME/.gitswitch.conf"
+GITSWITCH_REMOTE_URL="https://raw.githubusercontent.com/nh4ttruong/macsetup/main/gitswitch"
+
+# Prompt for a single git profile. Sets PROFILE_NAME and PROFILE_EMAIL globals.
+# Returns 1 if the user skipped (empty name).
+prompt_git_profile() {
+  local label="$1" default_name="${2:-}" default_email="${3:-}"
+  PROFILE_NAME=""
+  PROFILE_EMAIL=""
+
+  local name_prompt="  Name"
+  [[ -n "$default_name" ]] && name_prompt+=" [$default_name]"
+  name_prompt+=" (Enter to skip): "
+
+  printf "%s" "$name_prompt"
+  read -r PROFILE_NAME
+  [[ -z "$PROFILE_NAME" ]] && PROFILE_NAME="$default_name"
+  [[ -z "$PROFILE_NAME" ]] && return 1
+
+  local email_prompt="  Email"
+  [[ -n "$default_email" ]] && email_prompt+=" [$default_email]"
+  email_prompt+=": "
+
+  printf "%s" "$email_prompt"
+  read -r PROFILE_EMAIL
+  [[ -z "$PROFILE_EMAIL" ]] && PROFILE_EMAIL="$default_email"
+  [[ -z "$PROFILE_EMAIL" ]] && { warn "Email is required — skipped $label"; return 1; }
+  return 0
+}
+
+# Locate the bundled gitswitch script next to this setup; fall back to GitHub raw.
+locate_gitswitch_source() {
+  local local_path="${SCRIPT_PATH:h}/gitswitch"
+  if [[ -f "$local_path" ]]; then
+    GITSWITCH_SRC="$local_path"
+    GITSWITCH_SRC_KIND=local
+  else
+    GITSWITCH_SRC="$GITSWITCH_REMOTE_URL"
+    GITSWITCH_SRC_KIND=remote
+  fi
+}
+
+# Copy or download the gitswitch script to /usr/local/bin (uses sudo when needed).
+install_gitswitch_bin() {
+  locate_gitswitch_source
+  local sudo=""
+  [[ -w /usr/local/bin || ! -e /usr/local/bin ]] || sudo="sudo"
+  [[ -n "$sudo" ]] && log "Installing $GITSWITCH_BIN (sudo required)"
+  $sudo mkdir -p /usr/local/bin
+  if [[ "$GITSWITCH_SRC_KIND" == local ]]; then
+    $sudo cp "$GITSWITCH_SRC" "$GITSWITCH_BIN"
+  else
+    log "Downloading gitswitch from $GITSWITCH_SRC"
+    curl -fsSL "$GITSWITCH_SRC" | $sudo tee "$GITSWITCH_BIN" >/dev/null
+  fi
+  $sudo chmod +x "$GITSWITCH_BIN"
+  log "Installed $GITSWITCH_BIN"
+}
+
+# Write profile values from globals GIT_PROFILES, GIT_PROFILE_NAMES, GIT_PROFILE_EMAILS
+# to ~/.gitswitch.conf and install the binary.
+install_gitswitch() {
+  (( ${#GIT_PROFILES[@]} == 0 )) && return
+
+  # Truncate config — rewrite from scratch since profile labels can change.
+  mkdir -p "$(dirname "$GITSWITCH_CONF")"
+  : > "$GITSWITCH_CONF"
+
+  {
+    print -r -- "# gitswitch profiles — generated by macsetup ./setup git"
+    print -nr -- "PROFILES=("
+    local first=true
+    for p in "${GIT_PROFILES[@]}"; do
+      $first || print -nr -- " "
+      print -nr -- "\"$p\""
+      first=false
+    done
+    print -r -- ")"
+    print
+    local i
+    for ((i=1; i<=${#GIT_PROFILES[@]}; i++)); do
+      local p="${GIT_PROFILES[$i]}"
+      print -r -- "PROFILE_${p}_NAME=\"${GIT_PROFILE_NAMES[$i]}\""
+      print -r -- "PROFILE_${p}_EMAIL=\"${GIT_PROFILE_EMAILS[$i]}\""
+    done
+  } >> "$GITSWITCH_CONF"
+  chmod 600 "$GITSWITCH_CONF"
+  success "Wrote ${#GIT_PROFILES[@]} profile(s) to $GITSWITCH_CONF"
+
+  install_gitswitch_bin
+  info "Usage: gitswitch <${(j: | :)GIT_PROFILES}> | gitswitch list"
+}
+
+group_git() {
+  command -v git &>/dev/null || { warn "git not installed — run: ./setup cli"; return; }
+
+  if $ONE_CLICK; then
+    warn "Skipping git profile setup (run './setup git' separately to configure)"
+    return
+  fi
+
+  header "Git identity profiles"
+  dim "  Default: 2 profiles named 'personal' and 'work'."
+  dim "  You can rename them and add more. Press Enter to accept defaults."
+  print
+
+  local cur_name cur_email count
+  cur_name="$(git config --global --get user.name 2>/dev/null || true)"
+  cur_email="$(git config --global --get user.email 2>/dev/null || true)"
+
+  ask "How many profiles? [2]:"
+  read -r count
+  count="${count:-2}"
+  if [[ ! "$count" =~ '^[0-9]+$' || "$count" -lt 1 ]]; then
+    warn "Invalid count, using default 2"
+    count=2
+  fi
+
+  GIT_PROFILES=()
+  GIT_PROFILE_NAMES=()
+  GIT_PROFILE_EMAILS=()
+
+  local i
+  for ((i=1; i<=count; i++)); do
+    local default_label="${DEFAULT_PROFILES[$i]:-profile$i}"
+    print
+    print -P "%F{cyan}┌─ Profile $i of $count ─┐%f"
+
+    ask "Label [$default_label]:"
+    local label
+    read -r label
+    label="${label:-$default_label}"
+    if [[ ! "$label" =~ '^[a-zA-Z0-9_-]+$' ]]; then
+      warn "Label must contain only letters, digits, '_' or '-' — skipped"
+      continue
+    fi
+
+    local default_name="" default_email=""
+    if (( i == 1 )); then
+      default_name="$cur_name"
+      default_email="$cur_email"
+    fi
+
+    if prompt_git_profile "$label" "$default_name" "$default_email"; then
+      GIT_PROFILES+=("$label")
+      GIT_PROFILE_NAMES+=("$PROFILE_NAME")
+      GIT_PROFILE_EMAILS+=("$PROFILE_EMAIL")
+      if (( i == 1 )); then
+        git config --global user.name  "$PROFILE_NAME"
+        git config --global user.email "$PROFILE_EMAIL"
+        success "Set global git identity to $PROFILE_NAME <$PROFILE_EMAIL>"
+      fi
+    fi
+  done
+
+  install_gitswitch
+}
+
+# ---------- CLI ----------
+
+print_help() {
+  sed -n '3,12p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
+}
+
+print_list() {
+  print -P "%BAvailable groups:%b"
+  for g in "${GROUPS[@]}"; do
+    printf "  %-6s %s\n" "$g" "${GROUP_DESC[$g]}"
+  done
+  printf "  %-6s %s\n" "all" "Install every group above"
+}
+
+print_banner() {
+  print
+  print -P "%F{cyan}%B  macsetup%b%f $(dim '— macOS provisioner')"
+  hr
+}
+
+interactive_menu() {
+  print_banner
+  print -P "%BSelect groups to install%b"
+  print
+  local i=1
+  for g in "${GROUPS[@]}"; do
+    print -P "  %F{cyan}$(printf '%2d' $i)%f  $(printf '%-6s' $g)  ${GROUP_DESC[$g]}"
+    ((i++))
+  done
+  print
+  print -P "  %F{green} a%f  all    One-click — install everything, no prompts"
+  print -P "  %F{red} q%f  quit   Exit without changes"
+  print
+  dim "  Pick numbers like '1 3 5' to install specific groups."
+  ask "Selection:"
+  local choice
+  read -r choice
+  case "$choice" in
+    q|quit|exit) info "Bye."; exit 0 ;;
+    a|all)
+      SELECTED=("${GROUPS[@]}")
+      ONE_CLICK=true
+      return 0
+      ;;
+    "")
+      warn "Nothing selected."
+      return 1
+      ;;
+  esac
+  SELECTED=()
+  for token in ${(s: :)choice}; do
+    if [[ "$token" =~ '^[0-9]+$' && "$token" -ge 1 && "$token" -le ${#GROUPS[@]} ]]; then
+      SELECTED+=("${GROUPS[$token]}")
+    else
+      warn "Invalid selection: $token"
+      return 1
+    fi
+  done
+  return 0
+}
+
+run_group() {
+  local name="$1"
+  print
+  print -P "%F{cyan}%B┌──[ $name ]%b%f $(dim '──────────────')"
+  "group_$name"
+  print -P "%F{cyan}%B└─%b%f"
+}
+
+run_selected() {
+  # brew is a prerequisite for every other group — run it first if anything else is selected.
+  if (( ${SELECTED[(Ie)brew]} == 0 )) && ! command -v brew &>/dev/null; then
+    SELECTED=(brew "${SELECTED[@]}")
+  fi
+  for g in "${SELECTED[@]}"; do
+    run_group "$g"
+    $BACK_REQUESTED && return 0
+  done
+}
+
+main() {
+  local -a SELECTED
+
+  case "${1:-}" in
+    -h|--help) print_help; exit 0 ;;
+    -l|--list) print_list; exit 0 ;;
+    "")
+      INTERACTIVE=true
+      while true; do
+        SELECTED=()
+        ONE_CLICK=false
+        BACK_REQUESTED=false
+        interactive_menu || continue
+        run_selected
+        if $BACK_REQUESTED; then
+          info "Returning to menu…"
+          continue
+        fi
+        break
+      done
+      ;;
+    all)
+      SELECTED=("${GROUPS[@]}")
+      ONE_CLICK=true
+      run_selected
+      ;;
+    *)
+      for arg in "$@"; do
+        if [[ -z "${GROUP_DESC[$arg]}" ]]; then
+          fail "Unknown group: $arg (run with --list to see options)"
+        fi
+        SELECTED+=("$arg")
+      done
+      run_selected
+      ;;
+  esac
+
+  print
+  success "Done. Restart your terminal or run: source $ZSHRC_FILE"
+}
+
+main "$@"
