@@ -21,13 +21,13 @@ This project exists so that setting up a new MacBook never means hunting through
 
 ## Install
 
-Run directly with `curl`:
+**One-shot via `curl`**:
 
 ```zsh
-curl -fsSL https://raw.githubusercontent.com/nh4ttruong/macsetup/main/setup | zsh
+curl -fsSLO https://raw.githubusercontent.com/nh4ttruong/macsetup/main/setup && zsh setup
 ```
 
-Or clone for repeatable use:
+or clone for manually:
 
 ```zsh
 git clone https://github.com/nh4ttruong/macsetup.git
