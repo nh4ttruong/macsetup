@@ -43,9 +43,11 @@ CASK_APPS=(
   iterm2
   microsoft-edge
   telegram
-  xkey
-  termius
+  xkey # Vietnamese keyboard input & translator for MacOS
+  termius # Terminal for macOS
   orbstack # Docker alternative with better Apple Silicon support
+  maccy # Lightweight clipboard manager for macOS
+  mos # A lightweight tool used to smooth scrolling and set scroll direction independently for your mouse on macOS
 )
 
 FONTS=(

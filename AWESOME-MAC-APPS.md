@@ -6,17 +6,21 @@
 
 ## Contents
 
-- [GUI Apps](#gui-apps)
-  - [Editor & IDE](#editor--ide)
-  - [Terminal](#terminal)
-  - [Browser](#browser)
-  - [Communication](#communication)
-  - [Containers & Dev Environments](#containers--dev-environments)
-  - [SSH & Remote](#ssh--remote)
-  - [Input Method](#input-method)
-- [Command-Line Tools](#command-line-tools)
-- [Fonts](#fonts)
-- [Shell & Package Management](#shell--package-management)
+- [Awesome Mac Apps I Actually Use](#awesome-mac-apps-i-actually-use)
+  - [Contents](#contents)
+  - [GUI Apps](#gui-apps)
+    - [Editor \& IDE](#editor--ide)
+    - [Terminal](#terminal)
+    - [Browser](#browser)
+    - [Communication](#communication)
+    - [Containers \& Dev Environments](#containers--dev-environments)
+    - [SSH \& Remote](#ssh--remote)
+    - [Mouse \& Clipboard \& Input Method](#mouse--clipboard--input-method)
+  - [Command-Line Tools](#command-line-tools)
+  - [Fonts](#fonts)
+  - [Shell \& Package Management](#shell--package-management)
+  - [Manual config (no install, just settings)](#manual-config-no-install-just-settings)
+  - [Contributing](#contributing)
 
 ---
 
@@ -54,12 +58,18 @@ All installable via `brew install --cask <name>` — or just run `./setup apps` 
 - **[Termius](https://termius.com/)** — SSH client with synced hosts, port forwarding, SFTP. Beats hand-maintaining `~/.ssh/config` when you bounce between machines.
   `brew install --cask termius`
 
-### Input Method
+### Mouse & Clipboard & Input Method
 
 - **[XKey](https://github.com/xmannv/xkey)** — Vietnamese input method for macOS. Lightweight, open-source, works. If you don't type Vietnamese you can skip this one.
   `brew install --cask xkey`
 
   > Preset config: [`presets/XKey-Settings.plist`](https://github.com/nh4ttruong/macsetup/blob/main/presets/XKey-Settings.plist) in macsetup — import from the XKey settings panel.
+
+- **[Maccy](https://maccy.app/)** — Lightweight clipboard manager for macOS.
+  `brew install --cask maccy`
+
+- **[MOS](https://mos.cool/)** — A lightweight tool used to smooth scrolling and set scroll direction independently for your mouse on macOS.
+  `brew install --cask mos`
 
 ---
 
@@ -67,16 +77,16 @@ All installable via `brew install --cask <name>` — or just run `./setup apps` 
 
 The CLI lineup. All `brew install <name>` — or `./setup cli`.
 
-| Tool      | Why it's here                                                                |
-| --------- | ---------------------------------------------------------------------------- |
-| **[git](https://git-scm.com/)**     | The newer Homebrew `git` is faster than the Apple-shipped one. Worth the swap. |
-| **[make](https://www.gnu.org/software/make/)**    | GNU Make. Every project eventually has a Makefile.                            |
-| **[jq](https://jqlang.github.io/jq/)**      | JSON slicing on the command line. If you do anything with APIs, this is non-negotiable. |
-| **[yq](https://github.com/mikefarah/yq)**      | `jq` for YAML. Helm values, Kubernetes manifests, CI configs — `yq` reads them all. |
-| **[nano](https://www.nano-editor.org/)**    | The "quick fix in a remote shell" editor. Yes, vim users, I know. We've all moved on. |
-| **[nanorc](https://github.com/scopatz/nanorc)** | Syntax highlighting for nano. Enabled automatically by macsetup.              |
-| **[pnpm](https://pnpm.io/)**    | Node package manager that respects your disk space and your patience.         |
-| **[telnet](https://en.wikipedia.org/wiki/Telnet)**  | For when you just need to poke a TCP port and see what answers.               |
+| Tool                                               | Why it's here                                                                           |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **[git](https://git-scm.com/)**                    | The newer Homebrew `git` is faster than the Apple-shipped one. Worth the swap.          |
+| **[make](https://www.gnu.org/software/make/)**     | GNU Make. Every project eventually has a Makefile.                                      |
+| **[jq](https://jqlang.github.io/jq/)**             | JSON slicing on the command line. If you do anything with APIs, this is non-negotiable. |
+| **[yq](https://github.com/mikefarah/yq)**          | `jq` for YAML. Helm values, Kubernetes manifests, CI configs — `yq` reads them all.     |
+| **[nano](https://www.nano-editor.org/)**           | The "quick fix in a remote shell" editor. Yes, vim users, I know. We've all moved on.   |
+| **[nanorc](https://github.com/scopatz/nanorc)**    | Syntax highlighting for nano. Enabled automatically by macsetup.                        |
+| **[pnpm](https://pnpm.io/)**                       | Node package manager that respects your disk space and your patience.                   |
+| **[telnet](https://en.wikipedia.org/wiki/Telnet)** | For when you just need to poke a TCP port and see what answers.                         |
 
 ---
 
