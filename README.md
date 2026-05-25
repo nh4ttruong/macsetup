@@ -2,6 +2,10 @@
 
 A lightweight, idempotent shell script for provisioning a fresh macOS development machine. Install everything in one shot, or pick only the groups you need.
 
+<p align="center">
+  <img src="assets/banner.svg" alt="macsetup — one script, one fresh Mac" width="100%"/>
+</p>
+
 ## Purpose
 
 This project exists so that setting up a new MacBook never means hunting through old notes or remembering which tools, fonts, and apps to install. Running `./setup` (or `./setup all`) restores a known-good development environment in a single, repeatable step: Homebrew, shell config, Node.js, CLI tools, GUI apps, fonts, and git identity profiles are all provisioned automatically. No more manual installs, no more "what was that one tool I always need?".
@@ -64,17 +68,20 @@ The main menu also accepts `q` to quit without changes. Choosing `all` from the 
 
 ## Groups
 
-| Group   | Summary                                                              |
-| ------- | -------------------------------------------------------------------- |
-| `brew`  | Install or update Homebrew                                           |
-| `zsh`   | `zsh-completions` and shell config block in `~/.zshrc`               |
-| `node`  | `nvm` + Node.js (prompts for version, default 24)                    |
-| `cli`   | Common CLI tools - _expand below_                                    |
-| `apps`  | GUI apps (Homebrew casks) - _expand below_                           |
-| `fonts` | Developer fonts - _expand below_                                     |
-| `git`   | N renamable profiles (default 2) + `/usr/local/bin/gitswitch`        |
+| Group   | Summary                                                       |
+| ------- | ------------------------------------------------------------- |
+| `brew`  | Install or update Homebrew                                    |
+| `zsh`   | `zsh-completions` and shell config block in `~/.zshrc`        |
+| `node`  | `nvm` + Node.js (prompts for version, default 24)             |
+| `cli`   | Common CLI tools - _expand below_                             |
+| `apps`  | GUI apps (Homebrew casks) - _expand below_                    |
+| `fonts` | Developer fonts - _expand below_                              |
+| `git`   | N renamable profiles (default 2) + `/usr/local/bin/gitswitch` |
 
 `brew` is a prerequisite for every other group and is installed automatically when missing. Missing per-group dependencies (e.g., `git` for the `git` group) are detected and you're prompted to install them in place.
+
+> [!TIP]
+> For a curated walkthrough of every bundled app, CLI tool, and font — with one-line notes on *why* each one is here — see [AWESOME-MAC-APPS.md](AWESOME-MAC-APPS.md).
 
 <details>
 <summary><b>cli</b> - included packages</summary>
