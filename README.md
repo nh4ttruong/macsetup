@@ -145,6 +145,16 @@ Profile labels can be any `[a-zA-Z0-9_-]+`. Re-run `./setup git` to update profi
 
 After installing XKey (via the `apps` group), import [presets/XKey-Settings.plist](presets/XKey-Settings.plist) from the XKey settings panel.
 
+### Import iTerm2 profile
+
+After installing iTerm2 (via the `apps` group), import [presets/iterm2profile.json](presets/iterm2profile.json) from the iTerm2 settings panel.
+"Edit" -> "Profile Preferences" -> "Import" (or just drag the JSON file onto the window)
+
+> [!NOTE]
+> You can use coolnight.itermcolors](presets/coolnight.itermcolors) for a coolnight theme.
+
+![coolnight Color Scheme](./assets/coolnight-colorschemes.png)
+
 ### Manual macOS settings
 
 A few preferences are still easier to configure by hand in **System Settings**:
