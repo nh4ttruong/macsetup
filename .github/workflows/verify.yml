@@ -1,0 +1,158 @@
+name: Verify setup
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify setup script
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify syntax and CLI contract
+        shell: zsh {0}
+        run: |
+          set -e
+
+          zsh -n setup
+
+          ./setup --help > "$RUNNER_TEMP/help.txt"
+          grep -q "Usage:" "$RUNNER_TEMP/help.txt"
+          grep -q "Available groups:" "$RUNNER_TEMP/help.txt"
+
+          ./setup --list > "$RUNNER_TEMP/list.txt"
+          for group in brew terminal node cli application presets fonts git all; do
+            grep -Eq "^[[:space:]]+${group}[[:space:]]" "$RUNNER_TEMP/list.txt"
+          done
+
+          if grep -Eq "^[[:space:]]+(apps|zsh)[[:space:]]" "$RUNNER_TEMP/list.txt"; then
+            print -u2 "Deprecated group is still listed"
+            cat "$RUNNER_TEMP/list.txt" >&2
+            exit 1
+          fi
+
+      - name: Verify deprecated groups are rejected
+        shell: zsh {0}
+        run: |
+          set -e
+
+          for group in apps zsh; do
+            if ./setup "$group" > "$RUNNER_TEMP/$group.out" 2>&1; then
+              print -u2 "Deprecated group '$group' unexpectedly succeeded"
+              cat "$RUNNER_TEMP/$group.out" >&2
+              exit 1
+            fi
+            grep -q "Unknown group: $group" "$RUNNER_TEMP/$group.out"
+          done
+
+      - name: Verify picker groups can be skipped safely
+        shell: zsh {0}
+        run: |
+          set -e
+
+          for group in cli application fonts; do
+            tmp_home="$(mktemp -d)"
+            trap 'rm -rf "$tmp_home"' EXIT
+            printf 'n\n' | HOME="$tmp_home" ./setup "$group" > "$RUNNER_TEMP/$group-skip.out"
+            grep -q "Skipped" "$RUNNER_TEMP/$group-skip.out"
+            grep -q "No changes made." "$RUNNER_TEMP/$group-skip.out"
+
+            # "skip" must not leave any file behind in $HOME.
+            leftovers=("$tmp_home"/*(ND))
+            if (( ${#leftovers[@]} > 0 )); then
+              print -u2 "Skip left files behind in HOME for group '$group':"
+              print -l -- "${leftovers[@]}" >&2
+              exit 1
+            fi
+            rm -rf "$tmp_home"
+            trap - EXIT
+          done
+
+      - name: Verify invalid picker input re-prompts instead of exiting
+        shell: zsh {0}
+        run: |
+          set -e
+
+          tmp_home="$(mktemp -d)"
+          trap 'rm -rf "$tmp_home"' EXIT
+          printf 'x,\n99\nn\n' | HOME="$tmp_home" ./setup cli > "$RUNNER_TEMP/reprompt.out" 2>&1
+          grep -q "Invalid selection: x" "$RUNNER_TEMP/reprompt.out"
+          grep -q "Out of range: 99" "$RUNNER_TEMP/reprompt.out"
+          grep -q "Skipped" "$RUNNER_TEMP/reprompt.out"
+          [[ ! -e "$tmp_home/.nanorc" ]]
+
+      - name: Verify quit and EOF exit gracefully
+        shell: zsh {0}
+        run: |
+          set -e
+
+          printf 'q\n' | ./setup > "$RUNNER_TEMP/menu-quit.out" 2>&1
+          grep -q "Bye." "$RUNNER_TEMP/menu-quit.out"
+          grep -q "No changes made." "$RUNNER_TEMP/menu-quit.out"
+
+          ./setup < /dev/null > "$RUNNER_TEMP/menu-eof.out" 2>&1
+          grep -q "Bye." "$RUNNER_TEMP/menu-eof.out"
+
+          tmp_home="$(mktemp -d)"
+          trap 'rm -rf "$tmp_home"' EXIT
+          printf 'q\n' | HOME="$tmp_home" ./setup cli > "$RUNNER_TEMP/picker-quit.out" 2>&1
+          grep -q "Bye." "$RUNNER_TEMP/picker-quit.out"
+          [[ ! -e "$tmp_home/.nanorc" ]]
+
+      - name: Verify presets from local checkout
+        shell: zsh {0}
+        run: |
+          set -e
+
+          tmp_home="$(mktemp -d)"
+          trap 'rm -rf "$tmp_home"' EXIT
+
+          printf '\n' | HOME="$tmp_home" ./setup presets
+
+          local_presets=(presets/*(.N))
+          downloaded_presets=("$tmp_home/Downloads"/*(.N))
+          expected_count="${#local_presets[@]}"
+          actual_count="${#downloaded_presets[@]}"
+
+          if [[ "$actual_count" != "$expected_count" ]]; then
+            print -u2 "Expected $expected_count preset files, got $actual_count"
+            print -l -- "${downloaded_presets[@]}" >&2
+            exit 1
+          fi
+
+          for preset in "${local_presets[@]}"; do
+            cmp "$preset" "$tmp_home/Downloads/${preset:t}"
+          done
+
+      - name: Verify presets via GitHub API fallback
+        shell: zsh {0}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRESET_API_URL: https://api.github.com/repos/${{ github.repository }}/contents/presets?ref=${{ github.sha }}
+        run: |
+          set -e
+
+          tmp_home="$(mktemp -d)"
+          tmp_script="$(mktemp -d)"
+          trap 'rm -rf "$tmp_home" "$tmp_script"' EXIT
+
+          cp setup "$tmp_script/setup"
+          printf '\n' | HOME="$tmp_home" zsh "$tmp_script/setup" presets
+
+          downloaded_presets=("$tmp_home/Downloads"/*(.N))
+          actual_count="${#downloaded_presets[@]}"
+          if (( actual_count == 0 )); then
+            print -u2 "GitHub API fallback did not download any presets"
+            exit 1
+          fi
+
+          print -l -- "${downloaded_presets[@]}"

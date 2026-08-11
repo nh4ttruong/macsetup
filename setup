@@ -1,0 +1,1157 @@
+#!/bin/zsh
+#
+# macOS setup script - installs Homebrew, CLI tools, apps, fonts, and git profiles.
+#
+# Usage:
+#   ./setup                     Interactive menu (multi-select)
+#   ./setup all                 Install everything
+#   ./setup <group>...          Install one or more groups
+#   ./setup -l | --list         List available groups
+#   ./setup -h | --help         Show this help
+#
+# Groups: brew, terminal, node, cli, application, presets, fonts, git
+
+set -e
+
+SCRIPT_PATH="${(%):-%x}"
+NODE_VERSION="26"
+ZSHRC_FILE="$HOME/.zshrc"
+NANORC_FILE="$HOME/.nanorc"
+DEFAULT_PRESET_DIR="$HOME/Downloads"
+PRESET_API_URL="${PRESET_API_URL:-https://api.github.com/repos/nh4ttruong/macsetup/contents/presets?ref=main}"
+GROUP_LABEL_WIDTH=11
+ONE_CLICK=false
+INTERACTIVE=false
+BACK_REQUESTED=false
+CHANGES_MADE=false
+SELECTED_ITEMS=()
+PARSED_INDICES=()
+INSTALLED_OK=()
+INSTALL_FAILED=()
+BREW_CACHE_LOADED=false
+INSTALLED_FORMULAE=()
+INSTALLED_CASKS=()
+
+# Colors are disabled when stdout is not a terminal or NO_COLOR is set.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RED=$'\e[31m'  C_GREEN=$'\e[32m'   C_YELLOW=$'\e[33m'
+  C_BLUE=$'\e[34m' C_MAGENTA=$'\e[35m' C_CYAN=$'\e[36m'
+  C_BOLD=$'\e[1m'  C_DIM=$'\e[2m'      C_RST=$'\e[0m'
+else
+  C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_MAGENTA='' C_CYAN=''
+  C_BOLD='' C_DIM='' C_RST=''
+fi
+
+DEFAULT_PROFILES=(personal work)
+GIT_PROFILES=()
+GIT_PROFILE_NAMES=()
+GIT_PROFILE_EMAILS=()
+
+# One entry per item: "name | one-line description" (full notes live in
+# AWESOME-MAC-APPS.md). The plain name arrays and the ITEM_DESC lookup used
+# by the picker are derived below, so adding or removing an item is a
+# single-line change in exactly one place.
+CLI_ITEMS=(
+  "git     | Version control (Homebrew build, newer than Apple's)"
+  "make    | GNU Make - build automation"
+  "jq      | Command-line JSON processor"
+  "yq      | jq for YAML - manifests, Helm values, CI configs"
+  "nano    | Quick-fix terminal text editor"
+  "nanorc  | Syntax highlighting for nano"
+  "pnpm    | Fast, disk-efficient Node.js package manager"
+  "telnet  | Poke a TCP port and see what answers"
+  "ripgrep | Fast recursive grep alternative (rg)"
+)
+
+CASK_ITEMS=(
+  "visual-studio-code | Daily-driver code editor"
+  "iterm2             | Modern terminal: split panes, search, hotkey windows"
+  "microsoft-edge     | Chromium browser with vertical tabs and Workspaces"
+  "telegram           | Messaging - snappy native desktop client"
+  "xkey               | Vietnamese keyboard input for macOS"
+  "termius            | SSH client with synced hosts, port forwarding, SFTP"
+  "orbstack           | Docker Desktop alternative built for Apple Silicon"
+  "maccy              | Lightweight clipboard manager"
+  "linearmouse        | Mouse and trackpad customization"
+  "thaw               | Menu bar manager"
+)
+
+FONT_ITEMS=(
+  "font-hack-nerd-font             | Hack patched with terminal icon glyphs"
+  "font-fira-code                  | Ligatures done right (=> != ->)"
+  "font-fira-code-nerd-font        | Fira Code patched with terminal icon glyphs"
+  "font-dejavu                     | Broad Unicode coverage fallback"
+  "font-dejavu-sans-mono-nerd-font | DejaVu Sans Mono with icon glyphs"
+  "font-hack                       | Clean, narrow, readable at small sizes"
+  "font-source-code-pro            | Adobe's open-source monospace"
+)
+
+# Derived from the *_ITEMS tables above - do not edit these directly.
+CLI_PACKAGES=("${CLI_ITEMS[@]%% *}")
+CASK_APPS=("${CASK_ITEMS[@]%% *}")
+FONTS=("${FONT_ITEMS[@]%% *}")
+
+typeset -A ITEM_DESC=()
+for _entry in "${CLI_ITEMS[@]}" "${CASK_ITEMS[@]}" "${FONT_ITEMS[@]}"; do
+  ITEM_DESC[${_entry%% *}]="${_entry#*| }"
+done
+unset _entry
+
+GROUPS=(brew terminal node cli application presets fonts git)
+typeset -A GROUP_DESC=(
+  brew        "Install or update Homebrew"
+  terminal    "zsh completions, shell colors, and a custom PROMPT in ~/.zshrc"
+  node        "Install nvm and Node.js ${NODE_VERSION}"
+  cli         "${#CLI_PACKAGES[@]} CLI tools (git, jq, yq, pnpm, ...)"
+  application "${#CASK_APPS[@]} GUI apps (VS Code, iTerm2, OrbStack, ...)"
+  presets     "Download config presets to ~/Downloads"
+  fonts       "${#FONTS[@]} developer fonts (Nerd Fonts, Fira Code, ...)"
+  git         "Git identity profiles + the gitprofile switcher"
+)
+
+# ---------- helpers ----------
+
+log()      { print -r -- "${C_CYAN}==>${C_RST} $*"; }
+info()     { print -r -- "${C_BLUE}-->${C_RST} $*"; }
+success()  { print -r -- "${C_GREEN} ✓ ${C_RST}$*"; }
+warn()     { print -r -- "${C_YELLOW} ! ${C_RST}$*" >&2; }
+fail()     { print -r -- "${C_RED} ✗ ${C_RST}$*" >&2; exit 1; }
+dim()      { print -r -- "${C_DIM}$*${C_RST}"; }
+
+hr() {
+  local width="$(terminal_columns)"
+  (( width > 60 )) && width=60
+  dim "${(l:$width::─:):-}"
+}
+
+header() {
+  print
+  print -r -- "${C_CYAN}${C_BOLD}▌${C_RST}${C_CYAN} $* ${C_RST}"
+  hr
+}
+
+ask() {
+  # Print a colored prompt arrow and label; no trailing newline.
+  print -rn -- "${C_MAGENTA}❯${C_RST} ${C_BOLD}$1${C_RST} "
+}
+
+# Read a line into the variable named by $1.
+# Treats EOF (Ctrl-D / exhausted piped input) as a graceful quit.
+read_input() {
+  if ! read -r "$1"; then
+    quit
+  fi
+}
+
+# Ask a yes/no question; default yes. Returns 1 only on an explicit no.
+confirm() {
+  ask "$1 [Y/n]:"
+  local _answer
+  read_input _answer
+  case "$_answer" in
+    n|N|no|No|NO) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Print the session summary and exit; used by 'q' answers and EOF.
+quit() {
+  print
+  print_summary
+  info "Bye."
+  if (( ${#INSTALL_FAILED[@]} > 0 )); then
+    exit 1
+  fi
+  exit 0
+}
+
+trap 'print; warn "Interrupted - stopping."; exit 130' INT
+
+terminal_columns() {
+  local cols="${COLUMNS:-}"
+  if [[ -z "$cols" || "$cols" != <-> ]]; then
+    cols="$(tput cols 2>/dev/null || true)"
+  fi
+  [[ "$cols" == <-> ]] || cols=100
+  (( cols < 60 )) && cols=60
+  print -r -- "$cols"
+}
+
+wrap_text() {
+  local text="$1" width="$2"
+  local -a words=("${(@s: :)text}")
+  local line="" word
+
+  for word in "${words[@]}"; do
+    if [[ -z "$line" ]]; then
+      line="$word"
+    elif (( ${#line} + 1 + ${#word} <= width )); then
+      line+=" $word"
+    else
+      print -r -- "$line"
+      line="$word"
+    fi
+  done
+  [[ -n "$line" ]] && print -r -- "$line"
+}
+
+print_wrapped_row() {
+  local label="$1" desc="$2" prefix="$3" indent="$4"
+  local desc_width=$(( $(terminal_columns) - indent ))
+  (( desc_width < 30 )) && desc_width=30
+
+  local wrapped="$(wrap_text "$desc" "$desc_width")"
+  local -a lines=("${(@f)wrapped}")
+  printf "%s%-${GROUP_LABEL_WIDTH}s %s\n" "$prefix" "$label" "${lines[1]}"
+
+  local i
+  for ((i=2; i<=${#lines[@]}; i++)); do
+    printf "%*s%s\n" "$indent" "" "${lines[$i]}"
+  done
+}
+
+append_once() {
+  local file="$1" marker="$2" content="$3"
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  if ! grep -qF "$marker" "$file"; then
+    printf '\n%s\n' "$content" >> "$file"
+    CHANGES_MADE=true
+  fi
+}
+
+quote_zsh() {
+  print -r -- "${(qqq)1}"
+}
+
+expand_user_path() {
+  # In zsh "path" is tied to $PATH, so the variable must not use that name.
+  local input="$1"
+  print -r -- "${input/#\~/$HOME}"
+}
+
+ensure_brew_shellenv() {
+  for prefix in /opt/homebrew /usr/local; do
+    [[ -x "$prefix/bin/brew" ]] && { eval "$($prefix/bin/brew shellenv)"; return; }
+  done
+}
+
+brew_has()      { brew list --formula "$1" &>/dev/null; }
+brew_cask_has() { brew list --cask "$1" &>/dev/null; }
+
+# Cache the installed formula/cask lists once per run so the menu and pickers
+# can mark items without one brew call per item.
+load_installed_cache() {
+  if $BREW_CACHE_LOADED; then
+    return 0
+  fi
+  BREW_CACHE_LOADED=true
+  command -v brew &>/dev/null || return 0
+  INSTALLED_FORMULAE=(${(f)"$(brew list --formula 2>/dev/null || true)"})
+  INSTALLED_CASKS=(${(f)"$(brew list --cask 2>/dev/null || true)"})
+  return 0
+}
+
+# Is <item> already installed, per the cache? kind: formula|cask|none
+item_installed() {
+  local kind="$1" item="$2"
+  case "$kind" in
+    formula) (( ${INSTALLED_FORMULAE[(Ie)$item]} > 0 )) ;;
+    cask)    (( ${INSTALLED_CASKS[(Ie)$item]} > 0 )) ;;
+    *)       return 1 ;;
+  esac
+}
+
+all_items_installed() {
+  local kind="$1" item
+  shift
+  for item in "$@"; do
+    item_installed "$kind" "$item" || return 1
+  done
+  return 0
+}
+
+# Heuristic "already set up" check per group, for the menu status marks.
+group_installed() {
+  case "$1" in
+    brew)        command -v brew &>/dev/null ;;
+    terminal)    [[ -f "$ZSHRC_FILE" ]] && grep -qF '# macsetup terminal shell configuration' "$ZSHRC_FILE" ;;
+    node)        item_installed formula nvm && [[ -d "$HOME/.nvm" ]] ;;
+    cli)         all_items_installed formula "${CLI_PACKAGES[@]}" ;;
+    application) all_items_installed cask "${CASK_APPS[@]}" ;;
+    fonts)       all_items_installed cask "${FONTS[@]}" ;;
+    git)         [[ -f "$GITPROFILE_CONF" ]] ;;
+    *)           return 1 ;;
+  esac
+}
+
+# Get the version of an installed formula or cask. Args: <name> <--formula|--cask>
+brew_version() {
+  brew list --versions "$2" "$1" 2>/dev/null | awk 'NR==1 {$1=""; sub(/^ /, ""); print}'
+}
+
+# Install a formula unless present. Optional $2 is a progress prefix like "(2/8)".
+# A failed install is recorded in INSTALL_FAILED and does not abort the run.
+install_formula() {
+  local pkg="$1" progress="${2:+$2 }"
+  if brew_has "$pkg"; then
+    local ver="$(brew_version "$pkg" --formula)"
+    success "${progress}$pkg already installed (v${ver:-unknown})"
+    return 0
+  fi
+  log "${progress}Installing $pkg"
+  if brew install "$pkg"; then
+    CHANGES_MADE=true
+    INSTALLED_OK+=("$pkg")
+    INSTALLED_FORMULAE+=("$pkg")
+  else
+    warn "Failed to install $pkg - continuing with the rest"
+    INSTALL_FAILED+=("$pkg")
+  fi
+}
+
+install_cask() {
+  local app="$1" progress="${2:+$2 }"
+  if brew_cask_has "$app"; then
+    local ver="$(brew_version "$app" --cask)"
+    success "${progress}$app already installed (v${ver:-unknown})"
+    return 0
+  fi
+  log "${progress}Installing $app"
+  if brew install --cask "$app"; then
+    CHANGES_MADE=true
+    INSTALLED_OK+=("$app")
+    INSTALLED_CASKS+=("$app")
+  else
+    warn "Failed to install $app - continuing with the rest"
+    INSTALL_FAILED+=("$app")
+  fi
+}
+
+require_brew() {
+  command -v brew &>/dev/null || fail "Homebrew is required. Run: ./setup brew"
+}
+
+# Ensure a command exists; prompt to install via brew if missing.
+# Returns 1 if the user declined or the install failed; 0 if available.
+# Usage: ensure_command <cmd> [<brew-formula>]
+ensure_command() {
+  local cmd="$1" pkg="${2:-$1}"
+  command -v "$cmd" &>/dev/null && return 0
+
+  require_brew
+  if ! $ONE_CLICK; then
+    warn "$cmd is not installed but is required for this option."
+    if ! confirm "Install $pkg now?"; then
+      warn "Skipped - $cmd is still required to use this option."
+      return 1
+    fi
+  fi
+  install_formula "$pkg"
+  if command -v "$cmd" &>/dev/null || brew_has "$pkg"; then
+    return 0
+  fi
+  return 1
+}
+
+# Parse a selection string like "1 3 5", "1,3" or "2-4" against <max> items.
+# Populates PARSED_INDICES (deduplicated, in input order).
+# Warns and returns 1 on any invalid or out-of-range token.
+parse_selection() {
+  local input="$1" max="$2"
+  PARSED_INDICES=()
+  local -a tokens=(${(s: :)${input//,/ }})
+  local token lo hi n
+
+  if (( ${#tokens[@]} == 0 )); then
+    warn "Nothing selected."
+    return 1
+  fi
+  for token in "${tokens[@]}"; do
+    if [[ "$token" =~ '^[0-9]+$' ]]; then
+      lo="$token" hi="$token"
+    elif [[ "$token" =~ '^([0-9]+)-([0-9]+)$' ]]; then
+      lo="${match[1]}" hi="${match[2]}"
+    else
+      warn "Invalid selection: $token"
+      return 1
+    fi
+    if (( lo < 1 || hi > max || lo > hi )); then
+      warn "Out of range: $token (valid: 1-$max)"
+      return 1
+    fi
+    for ((n=lo; n<=hi; n++)); do
+      if (( ${PARSED_INDICES[(Ie)$n]} == 0 )); then
+        PARSED_INDICES+=("$n")
+      fi
+    done
+  done
+  return 0
+}
+
+# Prompt the user to pick items from an array. Populates SELECTED_ITEMS.
+# In ONE_CLICK mode, selects everything without prompting.
+# kind (formula|cask|none) is used to mark items that are already installed.
+# In INTERACTIVE mode, 'b' returns to the main menu (sets BACK_REQUESTED).
+# Returns 2 if the user requested back; 0 otherwise.
+# Usage: select_items "<label>" <kind> "${ITEM_ARRAY[@]}"
+select_items() {
+  local label="$1" kind="$2"
+  shift 2
+  local -a items=("$@")
+  SELECTED_ITEMS=()
+
+  if $ONE_CLICK; then
+    SELECTED_ITEMS=("${items[@]}")
+    return 0
+  fi
+
+  load_installed_cache
+  header "$label"
+
+  local it name_width=0
+  for it in "${items[@]}"; do
+    (( ${#it} > name_width )) && name_width=${#it}
+  done
+
+  local i=1 mark padded any_installed=false
+  for it in "${items[@]}"; do
+    mark=" "
+    if item_installed "$kind" "$it"; then
+      mark="${C_GREEN}✓${C_RST}"
+      any_installed=true
+    fi
+    printf -v padded "%-${name_width}s" "$it"
+    print -r -- "  ${C_CYAN}${(l:2:)i}${C_RST} $mark $padded  ${C_DIM}${ITEM_DESC[$it]:-}${C_RST}"
+    ((i++))
+  done
+  print
+
+  local hint="  a = all   n = skip   q = quit"
+  if $INTERACTIVE; then
+    hint+="   b = back to menu"
+  fi
+  dim "$hint   -  or pick numbers like '1 3-5'"
+  if $any_installed; then
+    dim "  ✓ = already installed"
+  fi
+
+  local choice n
+  while true; do
+    ask "Selection [a]:"
+    read_input choice
+    case "$choice" in
+      ""|a|all)
+        SELECTED_ITEMS=("${items[@]}")
+        return 0
+        ;;
+      n|none|skip)
+        info "Skipped $label"
+        return 0
+        ;;
+      q|quit|exit)
+        quit
+        ;;
+      b|back)
+        if $INTERACTIVE; then
+          BACK_REQUESTED=true
+          return 2
+        fi
+        info "Skipped $label"
+        return 0
+        ;;
+      *)
+        if parse_selection "$choice" "${#items[@]}"; then
+          for n in "${PARSED_INDICES[@]}"; do
+            SELECTED_ITEMS+=("${items[$n]}")
+          done
+          return 0
+        fi
+        ;;
+    esac
+  done
+}
+
+# ---------- group installers ----------
+
+ensure_xcode_tools() {
+  if ! xcode-select -p &>/dev/null; then
+    log "Installing Apple command-line tools"
+    xcode-select --install
+    fail "Finish the Apple command-line tools installer, then rerun this script."
+  fi
+}
+
+group_brew() {
+  ensure_xcode_tools
+  if ! command -v brew &>/dev/null; then
+    log "Installing Homebrew"
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+  ensure_brew_shellenv
+  command -v brew &>/dev/null || fail "Homebrew installed but not on PATH. Restart your terminal and rerun."
+  log "Updating Homebrew"
+  brew update --force --quiet
+  brew doctor || true
+}
+
+fix_zsh_compaudit_permissions() {
+  autoload -Uz compaudit
+  local insecure_dirs
+  insecure_dirs="$(compaudit 2>/dev/null || true)"
+  [[ -z "$insecure_dirs" ]] && return
+
+  if chmod g-w,o-w "${(@f)insecure_dirs}" 2>/dev/null; then
+    info "Fixed zsh completion directory permissions"
+  else
+    warn "Could not fix every insecure zsh completion directory"
+  fi
+}
+
+group_terminal() {
+  require_brew
+  install_formula zsh-completions
+  append_once "$ZSHRC_FILE" \
+    'FPATH="$(brew --prefix)/share/zsh-completions:$FPATH"' \
+    'if command -v brew &>/dev/null; then
+  FPATH="$(brew --prefix)/share/zsh-completions:$FPATH"
+  autoload -Uz compinit
+  compinit -u
+fi'
+  append_once "$ZSHRC_FILE" \
+    '# macsetup terminal shell configuration' \
+    '# macsetup terminal shell configuration
+export CLICOLOR=1
+export LSCOLORS=GxFxCxDxBxegedabagaced
+alias ls="ls -GF"
+export PROMPT="%F{208}%n@%m%f %F{121}%~%f %% "'
+  fix_zsh_compaudit_permissions
+}
+
+group_node() {
+  require_brew
+  install_formula nvm
+  mkdir -p "$HOME/.nvm"
+  append_once "$ZSHRC_FILE" \
+    'export NVM_DIR="$HOME/.nvm"' \
+    'export NVM_DIR="$HOME/.nvm"
+[ -s "$(brew --prefix nvm)/nvm.sh" ] && . "$(brew --prefix nvm)/nvm.sh"
+[ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && . "$(brew --prefix nvm)/etc/bash_completion.d/nvm"'
+  [[ -s "$(brew --prefix nvm)/nvm.sh" ]] && . "$(brew --prefix nvm)/nvm.sh"
+
+  local node_ver="$NODE_VERSION"
+  if ! $ONE_CLICK; then
+    local answer
+    while true; do
+      ask "Node version to install [$NODE_VERSION]:"
+      read_input answer
+      if [[ -z "$answer" ]]; then
+        break
+      fi
+      if [[ "$answer" =~ '^(lts/[a-z*]+|v?[0-9]+(\.[0-9]+){0,2})$' ]]; then
+        node_ver="$answer"
+        break
+      fi
+      warn "That does not look like a Node version (examples: 26, 22.4.1, lts/jod)."
+    done
+  fi
+
+  if ! nvm ls "$node_ver" &>/dev/null; then
+    log "Installing Node.js $node_ver"
+    nvm install "$node_ver"
+    CHANGES_MADE=true
+  else
+    log "Node.js $node_ver already installed"
+  fi
+  nvm alias default "$node_ver"
+}
+
+group_cli() {
+  require_brew
+  select_items "CLI packages" formula "${CLI_PACKAGES[@]}" || return 0
+  local i=0 total=${#SELECTED_ITEMS[@]} pkg
+  for pkg in "${SELECTED_ITEMS[@]}"; do
+    (( ++i ))
+    install_formula "$pkg" "($i/$total)"
+  done
+  # "skip" must not modify the machine, so only touch ~/.nanorc when
+  # something was actually selected.
+  if (( total > 0 )); then
+    enable_nano_highlight
+  fi
+}
+
+# Auto-enable nano syntax highlighting when nanorc files are present.
+enable_nano_highlight() {
+  command -v brew &>/dev/null || return
+  local share_dir="$(brew --prefix)/share/nanorc"
+  if [[ -d "$share_dir" ]]; then
+    append_once "$NANORC_FILE" "include $share_dir/*.nanorc" "include $share_dir/*.nanorc"
+    info "Enabled nano syntax highlighting"
+  fi
+}
+
+group_application() {
+  require_brew
+  select_items "GUI applications" cask "${CASK_APPS[@]}" || return 0
+  local i=0 total=${#SELECTED_ITEMS[@]} app
+  for app in "${SELECTED_ITEMS[@]}"; do
+    (( ++i ))
+    install_cask "$app" "($i/$total)"
+  done
+}
+
+group_fonts() {
+  require_brew
+  select_items "Developer fonts" cask "${FONTS[@]}" || return 0
+  local i=0 total=${#SELECTED_ITEMS[@]} font
+  for font in "${SELECTED_ITEMS[@]}"; do
+    (( ++i ))
+    install_cask "$font" "($i/$total)"
+  done
+}
+
+list_local_presets() {
+  local preset_dir="${SCRIPT_PATH:h}/presets"
+  [[ -d "$preset_dir" ]] || return 1
+
+  local -a files=("$preset_dir"/*(.N))
+  (( ${#files[@]} > 0 )) || return 1
+
+  local file
+  for file in "${files[@]}"; do
+    print -r -- "${file:t}|$file"
+  done
+}
+
+list_remote_presets() {
+  # Keep this jq-free so presets can run before CLI tools are installed.
+  local token="${GITHUB_API_TOKEN:-${GITHUB_TOKEN:-}}"
+  local -a headers=(
+    -H "Accept: application/vnd.github+json"
+    -H "X-GitHub-Api-Version: 2022-11-28"
+  )
+  [[ -n "$token" ]] && headers+=(-H "Authorization: Bearer $token")
+
+  curl -fsSL "${headers[@]}" "$PRESET_API_URL" | awk '
+    /"name":/ && name == "" {
+      name = $0
+      sub(/^.*"name": "/, "", name)
+      sub(/",?$/, "", name)
+    }
+    /"download_url":/ {
+      download_url = $0
+      if (download_url ~ /null/) {
+        download_url = ""
+      } else {
+        sub(/^.*"download_url": "/, "", download_url)
+        sub(/",?$/, "", download_url)
+      }
+    }
+    /"type":/ {
+      type = $0
+      sub(/^.*"type": "/, "", type)
+      sub(/",?$/, "", type)
+    }
+    /^[[:space:]]*}/ {
+      if (type == "file" && name != "" && download_url != "") {
+        print name "|" download_url
+      }
+      name = ""
+      download_url = ""
+      type = ""
+    }
+  '
+}
+
+collect_preset_sources() {
+  local sources
+  sources="$(list_local_presets 2>/dev/null || true)"
+  if [[ -n "$sources" ]]; then
+    print -r -- "$sources"
+    return
+  fi
+
+  sources="$(list_remote_presets || true)"
+  [[ -n "$sources" ]] || fail "Could not find presets locally or via GitHub API."
+  print -r -- "$sources"
+}
+
+download_preset() {
+  local name="$1" source="$2" dest_dir="$3"
+  local dest="$dest_dir/$name"
+
+  if [[ "$source" == http://* || "$source" == https://* ]]; then
+    curl -fsSL "$source" -o "$dest"
+  else
+    cp "$source" "$dest"
+  fi
+  CHANGES_MADE=true
+  success "Saved $dest"
+}
+
+group_presets() {
+  local dest_dir="$DEFAULT_PRESET_DIR"
+
+  if ! $ONE_CLICK; then
+    ask "Download presets to [$DEFAULT_PRESET_DIR]:"
+    local answer
+    read_input answer
+    [[ -n "$answer" ]] && dest_dir="$answer"
+  fi
+
+  dest_dir="$(expand_user_path "$dest_dir")"
+  mkdir -p "$dest_dir"
+
+  local sources line name source
+  sources="$(collect_preset_sources)"
+  for line in "${(@f)sources}"; do
+    name="${line%%|*}"
+    source="${line#*|}"
+    download_preset "$name" "$source" "$dest_dir"
+  done
+}
+
+GITPROFILE_BIN="/usr/local/bin/gitprofile"
+GITPROFILE_LEGACY_BIN="/usr/local/bin/gitswitch"
+GITPROFILE_CONF="$HOME/.gitprofile.conf"
+GITPROFILE_LEGACY_CONF="$HOME/.gitswitch.conf"
+GITPROFILE_REMOTE_URL="https://raw.githubusercontent.com/nh4ttruong/macsetup/main/bin/gitprofile"
+
+# Prompt for a single git profile. Sets PROFILE_NAME and PROFILE_EMAIL globals.
+# Returns 1 if the user skipped (empty name).
+prompt_git_profile() {
+  local label="$1" default_name="${2:-}" default_email="${3:-}"
+  PROFILE_NAME=""
+  PROFILE_EMAIL=""
+
+  local name_prompt="  Name"
+  [[ -n "$default_name" ]] && name_prompt+=" [$default_name]"
+  name_prompt+=" (Enter to skip): "
+
+  printf "%s" "$name_prompt"
+  read_input PROFILE_NAME
+  [[ -z "$PROFILE_NAME" ]] && PROFILE_NAME="$default_name"
+  [[ -z "$PROFILE_NAME" ]] && return 1
+
+  local email_prompt="  Email"
+  [[ -n "$default_email" ]] && email_prompt+=" [$default_email]"
+  email_prompt+=": "
+
+  printf "%s" "$email_prompt"
+  read_input PROFILE_EMAIL
+  [[ -z "$PROFILE_EMAIL" ]] && PROFILE_EMAIL="$default_email"
+  [[ -z "$PROFILE_EMAIL" ]] && { warn "Email is required - skipped $label"; return 1; }
+  return 0
+}
+
+# Locate the bundled gitprofile script in bin/ next to this setup; fall back to GitHub raw.
+locate_gitprofile_source() {
+  local local_path="${SCRIPT_PATH:h}/bin/gitprofile"
+  if [[ -f "$local_path" ]]; then
+    GITPROFILE_SRC="$local_path"
+    GITPROFILE_SRC_KIND=local
+  else
+    GITPROFILE_SRC="$GITPROFILE_REMOTE_URL"
+    GITPROFILE_SRC_KIND=remote
+  fi
+}
+
+# Copy or download the gitprofile script to /usr/local/bin (uses sudo when needed).
+install_gitprofile_bin() {
+  locate_gitprofile_source
+  local sudo=""
+  [[ -w /usr/local/bin || ! -e /usr/local/bin ]] || sudo="sudo"
+  [[ -n "$sudo" ]] && log "Installing $GITPROFILE_BIN (sudo required)"
+  $sudo mkdir -p /usr/local/bin
+  if [[ "$GITPROFILE_SRC_KIND" == local ]]; then
+    $sudo cp "$GITPROFILE_SRC" "$GITPROFILE_BIN"
+  else
+    log "Downloading gitprofile from $GITPROFILE_SRC"
+    curl -fsSL "$GITPROFILE_SRC" | $sudo tee "$GITPROFILE_BIN" >/dev/null
+  fi
+  $sudo chmod +x "$GITPROFILE_BIN"
+  log "Installed $GITPROFILE_BIN"
+
+  if [[ -e "$GITPROFILE_LEGACY_BIN" ]]; then
+    if grep -q "gitswitch - switch the local git identity" "$GITPROFILE_LEGACY_BIN" 2>/dev/null; then
+      $sudo rm -f "$GITPROFILE_LEGACY_BIN"
+      info "Removed legacy $GITPROFILE_LEGACY_BIN"
+    else
+      warn "Found $GITPROFILE_LEGACY_BIN; left it untouched"
+    fi
+  fi
+}
+
+profile_config_name() {
+  local profile="$1" value="" legacy_var
+  if [[ "${(t)PROFILE_NAMES}" == *association* ]]; then
+    value="${PROFILE_NAMES[$profile]}"
+  fi
+  if [[ -z "$value" ]]; then
+    legacy_var="PROFILE_${profile}_NAME"
+    value="${(P)legacy_var}"
+  fi
+  print -r -- "$value"
+}
+
+profile_config_email() {
+  local profile="$1" value="" legacy_var
+  if [[ "${(t)PROFILE_EMAILS}" == *association* ]]; then
+    value="${PROFILE_EMAILS[$profile]}"
+  fi
+  if [[ -z "$value" ]]; then
+    legacy_var="PROFILE_${profile}_EMAIL"
+    value="${(P)legacy_var}"
+  fi
+  print -r -- "$value"
+}
+
+# Write profile values from globals GIT_PROFILES, GIT_PROFILE_NAMES, GIT_PROFILE_EMAILS
+# to ~/.gitprofile.conf and install the binary.
+install_gitprofile() {
+  (( ${#GIT_PROFILES[@]} == 0 )) && return
+
+  # Truncate config - rewrite from scratch since profile labels can change.
+  mkdir -p "$(dirname "$GITPROFILE_CONF")"
+  : > "$GITPROFILE_CONF"
+
+  {
+    print -r -- "# gitprofile profiles - generated by macsetup ./setup git"
+    print -nr -- "PROFILES=("
+    for p in "${GIT_PROFILES[@]}"; do
+      print -nr -- " $(quote_zsh "$p")"
+    done
+    print -r -- ")"
+    print
+
+    print -r -- "typeset -A PROFILE_NAMES"
+    print -nr -- "PROFILE_NAMES=("
+    local i
+    for ((i=1; i<=${#GIT_PROFILES[@]}; i++)); do
+      local p="${GIT_PROFILES[$i]}"
+      print -nr -- " $(quote_zsh "$p") $(quote_zsh "${GIT_PROFILE_NAMES[$i]}")"
+    done
+    print -r -- ")"
+
+    print -r -- "typeset -A PROFILE_EMAILS"
+    print -nr -- "PROFILE_EMAILS=("
+    for ((i=1; i<=${#GIT_PROFILES[@]}; i++)); do
+      local p="${GIT_PROFILES[$i]}"
+      print -nr -- " $(quote_zsh "$p") $(quote_zsh "${GIT_PROFILE_EMAILS[$i]}")"
+    done
+    print -r -- ")"
+  } >> "$GITPROFILE_CONF"
+  chmod 600 "$GITPROFILE_CONF"
+  CHANGES_MADE=true
+  success "Wrote ${#GIT_PROFILES[@]} profile(s) to $GITPROFILE_CONF"
+
+  install_gitprofile_bin
+  info "Usage: gitprofile <${(j: | :)GIT_PROFILES}> | gitprofile list"
+}
+
+group_git() {
+  ensure_command git || return 0
+
+  if $ONE_CLICK; then
+    warn "Skipping git profile setup (run './setup git' separately to configure)"
+    return
+  fi
+
+  header "Git identity profiles"
+  dim "  Default: 2 profiles named 'personal' and 'work'."
+  dim "  You can rename them and add more. Press Enter to accept defaults."
+  print
+
+  local existing_conf=""
+  if [[ -f "$GITPROFILE_CONF" ]]; then
+    existing_conf="$GITPROFILE_CONF"
+  elif [[ -f "$GITPROFILE_LEGACY_CONF" ]]; then
+    existing_conf="$GITPROFILE_LEGACY_CONF"
+  fi
+
+  if [[ -n "$existing_conf" ]]; then
+    warn "Existing profile config found at $existing_conf:"
+    (
+      if source "$existing_conf"; then
+        local p n e
+        for p in "${PROFILES[@]}"; do
+          n="$(profile_config_name "$p")"
+          e="$(profile_config_email "$p")"
+          print "    $p: $n <$e>"
+        done
+      else
+        warn "Could not read existing profile config; continuing will replace it."
+      fi
+    )
+    warn "Continuing will overwrite this config."
+    if ! confirm "Continue?"; then
+      info "Kept existing profiles. Skipping."
+      return 0
+    fi
+    print
+  fi
+
+  local cur_name cur_email count
+  cur_name="$(git config --global --get user.name 2>/dev/null || true)"
+  cur_email="$(git config --global --get user.email 2>/dev/null || true)"
+
+  ask "How many profiles? [2]:"
+  read_input count
+  count="${count:-2}"
+  if [[ ! "$count" =~ '^[0-9]+$' || "$count" -lt 1 ]]; then
+    warn "Invalid count, using default 2"
+    count=2
+  fi
+
+  GIT_PROFILES=()
+  GIT_PROFILE_NAMES=()
+  GIT_PROFILE_EMAILS=()
+
+  local i
+  for ((i=1; i<=count; i++)); do
+    local default_label="${DEFAULT_PROFILES[$i]:-profile$i}"
+    print
+    print -r -- "${C_CYAN}┌─ Profile $i of $count ─┐${C_RST}"
+
+    local label
+    while true; do
+      ask "Label [$default_label]:"
+      read_input label
+      label="${label:-$default_label}"
+      if [[ ! "$label" =~ '^[a-zA-Z0-9_-]+$' ]]; then
+        warn "Label must contain only letters, digits, '_' or '-'."
+        continue
+      fi
+      if (( ${GIT_PROFILES[(Ie)$label]} > 0 )); then
+        warn "Duplicate label '$label' - pick another."
+        continue
+      fi
+      break
+    done
+
+    local default_name="" default_email=""
+    if (( i == 1 )); then
+      default_name="$cur_name"
+      default_email="$cur_email"
+    fi
+
+    if prompt_git_profile "$label" "$default_name" "$default_email"; then
+      GIT_PROFILES+=("$label")
+      GIT_PROFILE_NAMES+=("$PROFILE_NAME")
+      GIT_PROFILE_EMAILS+=("$PROFILE_EMAIL")
+      if (( i == 1 )); then
+        git config --global user.name  "$PROFILE_NAME"
+        git config --global user.email "$PROFILE_EMAIL"
+        CHANGES_MADE=true
+        success "Set global git identity to $PROFILE_NAME <$PROFILE_EMAIL>"
+      fi
+    fi
+  done
+
+  install_gitprofile
+}
+
+# ---------- CLI ----------
+
+print_help() {
+  sed -n '3,10p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
+  print
+  print_list
+}
+
+print_list() {
+  print -r -- "${C_BOLD}Available groups:${C_RST}"
+  local list_indent=$(( 2 + GROUP_LABEL_WIDTH + 1 ))
+  for g in "${GROUPS[@]}"; do
+    print_wrapped_row "$g" "${GROUP_DESC[$g]}" "  " "$list_indent"
+  done
+  print_wrapped_row "all" "Install every group above" "  " "$list_indent"
+}
+
+print_banner() {
+  local title="MacSetup" tagline="Provision a fresh macOS development machine"
+  local width=$(( ${#tagline} + 4 ))
+  local bar="${(l:$width::─:):-}"
+  local line1 line2
+  printf -v line1 "  %-$(( width - 2 ))s" "$title"
+  printf -v line2 "  %-$(( width - 2 ))s" "$tagline"
+  print
+  print -r -- "${C_CYAN}╭${bar}╮${C_RST}"
+  print -r -- "${C_CYAN}│${C_RST}${C_BOLD}${line1}${C_RST}${C_CYAN}│${C_RST}"
+  print -r -- "${C_CYAN}│${C_RST}${C_DIM}${line2}${C_RST}${C_CYAN}│${C_RST}"
+  print -r -- "${C_CYAN}╰${bar}╯${C_RST}"
+}
+
+# Session summary: what was installed, what failed, whether anything changed.
+print_summary() {
+  if (( ${#INSTALLED_OK[@]} > 0 )); then
+    success "Installed (${#INSTALLED_OK[@]}): ${(j:, :)INSTALLED_OK}"
+  fi
+  if (( ${#INSTALL_FAILED[@]} > 0 )); then
+    warn "Failed (${#INSTALL_FAILED[@]}): ${(j:, :)INSTALL_FAILED} - see the brew output above, rerun to retry"
+  fi
+  if $CHANGES_MADE; then
+    success "Done. Restart your terminal or run: source $ZSHRC_FILE"
+  else
+    info "No changes made."
+  fi
+}
+
+interactive_menu() {
+  print_banner
+  load_installed_cache
+
+  # Resolve group status first so the ✓ legend can sit on the title line.
+  local -a marks=()
+  local g any_installed=false
+  for g in "${GROUPS[@]}"; do
+    if group_installed "$g"; then
+      marks+=("${C_GREEN}✓${C_RST}")
+      any_installed=true
+    else
+      marks+=(" ")
+    fi
+  done
+
+  print
+  local legend=""
+  if $any_installed; then
+    legend="   ${C_DIM}(✓ = already set up)${C_RST}"
+  fi
+  print -r -- "  ${C_BOLD}Select groups to install${C_RST}${legend}"
+  print
+  local i=1
+  local menu_indent=$(( 2 + 2 + 1 + 1 + 1 + GROUP_LABEL_WIDTH + 1 ))
+  for g in "${GROUPS[@]}"; do
+    print_wrapped_row "$g" "${GROUP_DESC[$g]}" "  ${C_CYAN}${(l:2:)i}${C_RST} ${marks[$i]} " "$menu_indent"
+    ((i++))
+  done
+  print
+  print -r -- "  ${C_GREEN} a${C_RST}   all    One-click - install everything, no prompts"
+  print -r -- "  ${C_RED} q${C_RST}   quit   Exit without changes"
+  print
+  dim "  Pick numbers ('1 3-5') or group names ('cli git')."
+
+  local choice token n
+  while true; do
+    ask "Selection:"
+    read_input choice
+    case "$choice" in
+      q|quit|exit)
+        quit
+        ;;
+      a|all)
+        SELECTED=("${GROUPS[@]}")
+        ONE_CLICK=true
+        return 0
+        ;;
+      "")
+        warn "Nothing selected - pick numbers, group names, 'a' or 'q'."
+        continue
+        ;;
+    esac
+    # Accept group names as well as numbers and ranges.
+    local -a numeric=()
+    for token in ${(s: :)${choice//,/ }}; do
+      if [[ -n "${GROUP_DESC[$token]:-}" ]]; then
+        numeric+=("${GROUPS[(Ie)$token]}")
+      else
+        numeric+=("$token")
+      fi
+    done
+    if parse_selection "${(j: :)numeric}" "${#GROUPS[@]}"; then
+      SELECTED=()
+      for n in "${PARSED_INDICES[@]}"; do
+        SELECTED+=("${GROUPS[$n]}")
+      done
+      return 0
+    fi
+  done
+}
+
+run_group() {
+  local name="$1"
+  print
+  print -r -- "${C_CYAN}${C_BOLD}┌──[ $name ]${C_RST}"
+  "group_$name"
+  print -r -- "${C_CYAN}${C_BOLD}└──[ $name ]${C_RST}"
+}
+
+selected_needs_brew() {
+  local g
+  for g in "${SELECTED[@]}"; do
+    case "$g" in
+      terminal|node|cli|application|fonts|git) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+run_selected() {
+  # Run brew first when selected groups need Homebrew and it is not available yet.
+  if (( ${SELECTED[(Ie)brew]} == 0 )) && selected_needs_brew && ! command -v brew &>/dev/null; then
+    SELECTED=(brew "${SELECTED[@]}")
+  fi
+  for g in "${SELECTED[@]}"; do
+    run_group "$g"
+    $BACK_REQUESTED && return 0
+  done
+}
+
+main() {
+  local -a SELECTED
+
+  case "${1:-}" in
+    -h|--help) print_help; exit 0 ;;
+    -l|--list) print_list; exit 0 ;;
+    "")
+      INTERACTIVE=true
+      local next
+      while true; do
+        SELECTED=()
+        ONE_CLICK=false
+        BACK_REQUESTED=false
+        interactive_menu
+        run_selected
+        # 'all' (one-click) exits after running everything.
+        $ONE_CLICK && break
+        if $BACK_REQUESTED; then
+          info "Returning to menu..."
+          continue
+        fi
+        # Group(s) finished. Ask what to do next.
+        print
+        success "Completed: ${(j:, :)SELECTED}"
+        ask "[b] back to menu  [q] quit:"
+        read_input next
+        case "$next" in
+          q|Q|exit|quit) break ;;
+          *) ;;
+        esac
+      done
+      ;;
+    all)
+      SELECTED=("${GROUPS[@]}")
+      ONE_CLICK=true
+      run_selected
+      ;;
+    *)
+      for arg in "$@"; do
+        if [[ -z "${GROUP_DESC[$arg]}" ]]; then
+          fail "Unknown group: $arg (run with --list to see options)"
+        fi
+        SELECTED+=("$arg")
+      done
+      run_selected
+      ;;
+  esac
+
+  print
+  print_summary
+  if (( ${#INSTALL_FAILED[@]} > 0 )); then
+    exit 1
+  fi
+}
+
+main "$@"

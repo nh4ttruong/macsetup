@@ -1,0 +1,156 @@
+{
+  "$schema" : "https:\/\/schema.linearmouse.app\/0.11.2",
+  "schemes" : [
+    {
+      "buttons" : {
+        "autoScroll" : {
+          "enabled" : false,
+          "mode" : [
+            "toggle",
+            "hold"
+          ],
+          "preserveNativeMiddleClick" : true,
+          "speed" : 1,
+          "trigger" : {
+            "button" : 2
+          }
+        },
+        "gesture" : {
+          "actions" : {
+            "down" : "showDesktop",
+            "left" : "missionControl.spaceRight",
+            "right" : "missionControl.spaceLeft",
+            "up" : "missionControl"
+          },
+          "enabled" : true,
+          "threshold" : 25,
+          "trigger" : {
+            "button" : 2,
+            "command" : false,
+            "control" : false,
+            "option" : false,
+            "shift" : false
+          }
+        },
+        "mappings" : [
+
+        ],
+        "universalBackForward" : false
+      },
+      "pointer" : {
+        "acceleration" : 0.6489,
+        "disableAcceleration" : true,
+        "speed" : 0.165
+      },
+      "scrolling" : {
+        "acceleration" : {
+          "vertical" : 1
+        },
+        "distance" : {
+          "vertical" : "auto"
+        },
+        "reverse" : {
+          "vertical" : true
+        },
+        "smoothed" : {
+          "vertical" : {
+            "acceleration" : 0.9,
+            "bouncing" : true,
+            "enabled" : true,
+            "inertia" : 0.7,
+            "preset" : "smooth",
+            "response" : 0.4,
+            "speed" : 0.8
+          }
+        },
+        "speed" : {
+          "vertical" : 0
+        }
+      }
+    },
+    {
+      "buttons" : {
+        "clickDebouncing" : {
+          "buttons" : [
+            2
+          ],
+          "timeout" : 0
+        },
+        "gesture" : {
+          "actions" : {
+            "down" : "appExpose",
+            "left" : "missionControl.spaceRight",
+            "right" : "missionControl.spaceLeft",
+            "up" : "missionControl"
+          },
+          "enabled" : true,
+          "threshold" : 25,
+          "trigger" : {
+            "button" : 2,
+            "command" : false,
+            "control" : false,
+            "option" : false,
+            "shift" : false
+          }
+        },
+        "switchPrimaryButtonAndSecondaryButtons" : false
+      },
+      "if" : {
+        "device" : {
+          "category" : "mouse",
+          "productID" : "0xb032",
+          "productName" : "Logi M650 B",
+          "serialNumber" : "BED37041",
+          "vendorID" : "0x46d"
+        }
+      },
+      "pointer" : {
+        "acceleration" : 2.25,
+        "disableAcceleration" : true,
+        "redirectsToScroll" : false
+      },
+      "scrolling" : {
+        "acceleration" : {
+          "vertical" : 1
+        },
+        "distance" : {
+          "vertical" : "auto"
+        },
+        "modifiers" : {
+          "horizontal" : {
+            "shift" : {
+              "type" : "auto"
+            }
+          },
+          "vertical" : {
+            "command" : {
+              "type" : "zoom"
+            },
+            "control" : {
+              "type" : "pinchZoom"
+            },
+            "shift" : {
+              "type" : "alterOrientation"
+            }
+          }
+        },
+        "reverse" : true,
+        "smoothed" : {
+          "vertical" : {
+            "acceleration" : 0.88,
+            "bouncing" : true,
+            "enabled" : true,
+            "inertia" : 0.9200000000000002048,
+            "preset" : "smooth",
+            "response" : 0.8,
+            "speed" : 1
+          }
+        },
+        "speed" : {
+          "horizontal" : 1.19,
+          "vertical" : 0
+        }
+      }
+    }
+  ]
+}

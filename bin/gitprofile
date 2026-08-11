@@ -1,0 +1,135 @@
+#!/bin/zsh
+#
+# gitprofile - switch the local git identity in a repo between named profiles.
+#
+# Usage:
+#   gitprofile <profile>       Switch the local repo identity
+#   gitprofile list            Show configured profiles
+#   gitprofile -h | --help
+#
+# Profiles are loaded from $GITPROFILE_CONFIG (default: ~/.gitprofile.conf).
+# Generate or update the config with macsetup: ./setup git
+
+set -e
+
+CONFIG="${GITPROFILE_CONFIG:-}"
+if [[ -z "$CONFIG" ]]; then
+  if [[ -f "$HOME/.gitprofile.conf" || ! -f "$HOME/.gitswitch.conf" ]]; then
+    CONFIG="$HOME/.gitprofile.conf"
+  else
+    CONFIG="$HOME/.gitswitch.conf"
+  fi
+fi
+
+# Colors are disabled when stdout is not a terminal or NO_COLOR is set.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RED=$'\e[31m' C_CYAN=$'\e[36m' C_BOLD=$'\e[1m' C_DIM=$'\e[2m' C_RST=$'\e[0m'
+else
+  C_RED='' C_CYAN='' C_BOLD='' C_DIM='' C_RST=''
+fi
+
+red()    { print -rn -- "${C_RED} ✗ ${C_RST}" >&2; print -r -- "$*" >&2; }
+cyan()   { print -rn -- "${C_CYAN}❯${C_RST} "; print -r -- "$*"; }
+dim()    { print -r -- "${C_DIM}$*${C_RST}"; }
+
+usage() {
+  cat <<EOF
+Usage:
+  gitprofile <profile>   Switch the local repo identity
+  gitprofile list        Show configured profiles
+  gitprofile -h | --help Show this help
+
+Profiles are loaded from \$GITPROFILE_CONFIG (default: ~/.gitprofile.conf).
+Existing ~/.gitswitch.conf files are read as a legacy fallback.
+Generate the config with macsetup: ./setup git
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+if [[ ! -f "$CONFIG" ]]; then
+  red "No profile config found at $CONFIG"
+  dim "Generate it by running macsetup: ./setup git"
+  exit 1
+fi
+
+if ! source "$CONFIG"; then
+  red "Could not read profile config at $CONFIG"
+  dim "Regenerate it by running macsetup: ./setup git"
+  exit 1
+fi
+
+if (( ${#PROFILES[@]} == 0 )); then
+  red "$CONFIG has no PROFILES configured"
+  exit 1
+fi
+
+profile_name() {
+  local profile="$1" value="" legacy_var
+  if [[ "${(t)PROFILE_NAMES}" == *association* ]]; then
+    value="${PROFILE_NAMES[$profile]}"
+  fi
+  if [[ -z "$value" ]]; then
+    legacy_var="PROFILE_${profile}_NAME"
+    value="${(P)legacy_var}"
+  fi
+  print -r -- "$value"
+}
+
+profile_email() {
+  local profile="$1" value="" legacy_var
+  if [[ "${(t)PROFILE_EMAILS}" == *association* ]]; then
+    value="${PROFILE_EMAILS[$profile]}"
+  fi
+  if [[ -z "$value" ]]; then
+    legacy_var="PROFILE_${profile}_EMAIL"
+    value="${(P)legacy_var}"
+  fi
+  print -r -- "$value"
+}
+
+list_profiles() {
+  print -r -- "${C_BOLD}Available profiles:${C_RST}"
+  local p name email
+  for p in "${PROFILES[@]}"; do
+    name="$(profile_name "$p")"
+    email="$(profile_email "$p")"
+    print -rn -- "  ${C_CYAN}$(printf '%-12s' "$p")${C_RST} "
+    print -r -- "$name <$email>"
+  done
+}
+
+case "${1:-}" in
+  "")
+    usage
+    print
+    list_profiles
+    exit 0
+    ;;
+  list|ls)
+    list_profiles
+    exit 0
+    ;;
+esac
+
+PROFILE="$1"
+if (( ${PROFILES[(Ie)$PROFILE]} == 0 )); then
+  red "Unknown profile: $PROFILE"
+  print
+  list_profiles
+  exit 1
+fi
+
+NAME="$(profile_name "$PROFILE")"
+EMAIL="$(profile_email "$PROFILE")"
+
+if [[ -z "$NAME" || -z "$EMAIL" ]]; then
+  red "Profile '$PROFILE' is missing name or email in $CONFIG"
+  exit 1
+fi
+
+git config --local user.name  "$NAME"
+git config --local user.email "$EMAIL"
+cyan "Switched local git identity to $PROFILE: $NAME <$EMAIL>"
