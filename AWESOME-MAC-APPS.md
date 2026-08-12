@@ -16,6 +16,7 @@
     - [Containers \& Dev Environments](#containers--dev-environments)
     - [SSH \& Remote](#ssh--remote)
     - [Mouse \& Clipboard \& Input Method](#mouse--clipboard--input-method)
+    - [Menu bar manager](#menu-bar-manager)
   - [Command-Line Tools](#command-line-tools)
   - [Fonts](#fonts)
   - [Shell \& Package Management](#shell--package-management)
@@ -68,8 +69,17 @@ All installable via `brew install --cask <name>` — or just run `./setup applic
 - **[Maccy](https://maccy.app/)** — Lightweight clipboard manager for macOS.
   `brew install --cask maccy`
 
-- **[MOS](https://mos.cool/)** — A lightweight tool used to smooth scrolling and set scroll direction independently for your mouse on macOS.
-  `brew install --cask mos`
+- **[LinearMouse](https://linearmouse.app/en/)** - The mouse and trackpad utility for Mac.
+  `brew install --cask linearmouse`
+
+### Menu bar manager
+
+
+
+- **[Thaw](https://github.com/thaw-app/Thaw)** — Menu bar manager for macOS. Great for notch Macs when you want a cleaner, less crowded top bar without sacrificing quick access to essentials.
+  `brew install --cask thaw`
+  > [!TIP]
+  > Use it with the Notch display on a MacBook
 
 ---
 
@@ -87,6 +97,7 @@ The CLI lineup. All `brew install <name>` — or `./setup cli`.
 | **[nanorc](https://github.com/scopatz/nanorc)**    | Syntax highlighting for nano. Enabled automatically by macsetup.                        |
 | **[pnpm](https://pnpm.io/)**                       | Node package manager that respects your disk space and your patience.                   |
 | **[telnet](https://en.wikipedia.org/wiki/Telnet)** | For when you just need to poke a TCP port and see what answers.                         |
+| **[glow](https://github.com/charmbracelet/glow)** | Render Markdown in the terminal. |
 
 ---
 

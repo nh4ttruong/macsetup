@@ -61,6 +61,7 @@ CLI_ITEMS=(
   "pnpm    | Fast, disk-efficient Node.js package manager"
   "telnet  | Poke a TCP port and see what answers"
   "ripgrep | Fast recursive grep alternative (rg)"
+  "glow    | Render Markdown in the terminal"
 )
 
 CASK_ITEMS=(
