@@ -74,12 +74,11 @@ All installable via `brew install --cask <name>` — or just run `./setup applic
 
 ### Menu bar manager
 
-
+> [!TIP]
+> Use it with the Notch display on a MacBook
 
 - **[Thaw](https://github.com/thaw-app/Thaw)** — Menu bar manager for macOS. Great for notch Macs when you want a cleaner, less crowded top bar without sacrificing quick access to essentials.
   `brew install --cask thaw`
-  > [!TIP]
-  > Use it with the Notch display on a MacBook
 
 ---
 
